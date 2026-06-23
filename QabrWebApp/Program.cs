@@ -1,0 +1,166 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using QabrWebApp.Builders;
+using QabrWebApp.Builders.impl;
+using QabrWebApp.Dal.Entities;
+using QabrWebApp.Dal.Repositories;
+using QabrWebApp.Domain.Repositories;
+using QabrWebApp.Domain.Services;
+using QabrWebApp.Domain.Services.impl;
+using QabrWebApp.Mapper;
+using QabrWebApp.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.UseUrls("http://0.0.0.0:5168");
+
+builder.Services.AddControllers()
+    .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
+builder.Services.AddEndpointsApiExplorer();
+
+builder.Services.AddCors(options =>
+    options.AddPolicy("AllowFront", policy =>
+        policy.WithOrigins("http://localhost:3000", "http://localhost:8081", "https://salatjanaza.org", "https://www.salatjanaza.org")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials()));
+
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "Qabr API", Version = "v1" });
+    c.EnableAnnotations();
+    c.AddSecurityDefinition("Bearer", new()
+    {
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        Description = "Token JWT émis par IdentityServer (port 5001)",
+    });
+    c.AddSecurityRequirement(new()
+    {
+        {
+            new() { Reference = new() { Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme, Id = "Bearer" } },
+            Array.Empty<string>()
+        }
+    });
+});
+
+builder.Services.AddDbContext<QabrWebAppDatabaseContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddAutoMapper(cfg => cfg.AddProfile<MapperProfile>());
+
+// JWT Bearer — validates tokens issued by IdentityServer
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = builder.Configuration["Auth:Authority"] ?? "http://localhost:5001";
+        options.Audience = "qabr-api";
+        options.RequireHttpsMetadata = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// Repositories
+builder.Services.AddScoped<IMosqueeRepository, MosqueeRepository>();
+builder.Services.AddScoped<IPriereJanazaRepository, PriereJanazaRepository>();
+builder.Services.AddScoped<IUtilisateurRepository, UtilisateurRepository>();
+builder.Services.AddScoped<IAbonnementRepository, AbonnementRepository>();
+builder.Services.AddScoped<IRappelPushRepository, RappelPushRepository>();
+builder.Services.AddScoped<IUtilisateurTokenRepository, UtilisateurTokenRepository>();
+
+// Domain services
+builder.Services.AddScoped<IMosqueeService, MosqueeService>();
+builder.Services.AddScoped<IPriereJanazaService, PriereJanazaService>();
+builder.Services.AddScoped<IUtilisateurService, UtilisateurService>();
+builder.Services.AddScoped<IAbonnementService, AbonnementService>();
+
+// ViewModel builders
+builder.Services.AddScoped<IMosqueeViewModelBuilder, MosqueeViewModelBuilder>();
+builder.Services.AddScoped<IPriereJanazaViewModelBuilder, PriereJanazaViewModelBuilder>();
+builder.Services.AddScoped<IUtilisateurViewModelBuilder, UtilisateurViewModelBuilder>();
+builder.Services.AddScoped<IAbonnementViewModelBuilder, AbonnementViewModelBuilder>();
+
+// Background services
+builder.Services.AddHostedService<PriereJanazaCleanupService>();
+builder.Services.AddHostedService<RappelPushBackgroundService>();
+
+// Infrastructure services
+builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddHttpClient<IOverpassService, OverpassService>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.Add("User-Agent", "QabrApp/1.0");
+});
+builder.Services.AddHttpClient("identity", c =>
+{
+    c.BaseAddress = new Uri(builder.Configuration["IdentityServer:BaseUrl"] ?? "http://localhost:5001");
+    c.Timeout = TimeSpan.FromSeconds(10);
+});
+builder.Services.AddHttpClient<IPushNotificationService, PushNotificationService>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(10);
+});
+
+var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
+    var retries = 10;
+    while (retries > 0)
+    {
+        try
+        {
+            db.Database.Migrate();
+            break;
+        }
+        catch (Exception)
+        {
+            retries--;
+            if (retries == 0) break;
+            Console.WriteLine($"SQL Server pas encore prêt, nouvelle tentative dans 5s... ({retries} restants)");
+            Thread.Sleep(5000);
+        }
+    }
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseRouting();
+app.UseCors("AllowFront");
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var ex = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Unhandled exception");
+        context.Response.StatusCode = 500;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsync(
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                error = ex?.Message,
+                detail = ex?.InnerException?.Message
+            }));
+    });
+});
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.MapControllers();
+app.MapFallbackToFile("index.html");
+
+app.Run();

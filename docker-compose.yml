@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  qabr-api:
+    image: mcr.microsoft.com/dotnet/aspnet:8.0
+    container_name: qabr-api
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://0.0.0.0:5168
+      - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
+    volumes:
+      - ./app/api:/app
+    entrypoint: ["dotnet", "QabrWebApp.Api.dll"]
+    networks:
+      - web
+      - geekai_internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.qabr-api.rule=Host(`api.salatjanaza.org`)"
+      - "traefik.http.routers.qabr-api.entrypoints=websecure"
+      - "traefik.http.routers.qabr-api.tls.certresolver=myresolver"
+      - "traefik.http.services.qabr-api.loadbalancer.server.port=5168"
+
+  qabr-identity:
+    image: mcr.microsoft.com/dotnet/aspnet:8.0
+    container_name: qabr-identity
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://0.0.0.0:5001
+      - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
+    volumes:
+      - ./app/identity:/app
+      - identity-keys:/root/.aspnet/DataProtection-Keys
+    entrypoint: ["dotnet", "QabrWebApp.IdentityServer.dll"]
+    networks:
+      - web
+      - geekai_internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.qabr-identity.rule=Host(`auth.salatjanaza.org`)"
+      - "traefik.http.routers.qabr-identity.entrypoints=websecure"
+      - "traefik.http.routers.qabr-identity.tls.certresolver=myresolver"
+      - "traefik.http.services.qabr-identity.loadbalancer.server.port=5001"
+
+volumes:
+  identity-keys:
+
+networks:
+  web:
+    external: true
+  geekai_internal:
+    external: true
