@@ -131,14 +131,6 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
-app.UseRouting();
-app.UseCors("AllowFront");
 app.UseExceptionHandler(errorApp =>
 {
     errorApp.Run(async context =>
@@ -156,6 +148,15 @@ app.UseExceptionHandler(errorApp =>
             }));
     });
 });
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseRouting();
+app.UseCors("AllowFront");
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseDefaultFiles();

@@ -1,3 +1,6 @@
+# Claude Code
+.claude/
+
 # ── Build output ──────────────────────────────────────────────────────────────
 [Bb]in/
 [Oo]bj/
@@ -68,6 +71,7 @@ TestResults/
 *.coveragexml
 
 # ── Secrets — NE JAMAIS COMMITER ──────────────────────────────────────────────
+**/appsettings.json
 **/appsettings.Production.json
 **/appsettings.production.json
 **/*.pfx
