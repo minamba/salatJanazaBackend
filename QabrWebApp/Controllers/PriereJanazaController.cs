@@ -99,6 +99,7 @@ namespace QabrWebApp.Controllers
         {
             var existing = await _service.GetByIdAsync(id);
             if (existing is null) return NotFound();
+            existing.MosqueeId = req.MosqueeId;
             existing.NomDefunt = req.NomDefunt;
             existing.EstAnonyme = req.EstAnonyme;
             existing.Genre = req.Genre;
