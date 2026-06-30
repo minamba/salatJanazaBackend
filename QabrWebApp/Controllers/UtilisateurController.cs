@@ -222,6 +222,30 @@ namespace QabrWebApp.Controllers
             return CreatedAtAction(nameof(GetById), new { id = profil.Id }, _builder.Build(profil));
         }
 
+        [HttpPut("{id}/import-flyer")]
+        [SwaggerOperation(Summary = "Active ou désactive la permission d'import flyer pour un utilisateur")]
+        public async Task<IActionResult> SetImportFlyer(int id, [FromBody] SetImportFlyerRequest req)
+        {
+            var existing = await _service.GetByIdAsync(id);
+            if (existing is null) return NotFound();
+            existing.CanImportFlyer = req.CanImportFlyer;
+            await _service.UpdateAsync(existing);
+            return Ok(_builder.Build(existing));
+        }
+
+        [HttpPut("import-flyer/bulk")]
+        [SwaggerOperation(Summary = "Active ou désactive la permission d'import flyer pour tous les utilisateurs")]
+        public async Task<IActionResult> SetImportFlyerBulk([FromBody] SetImportFlyerRequest req)
+        {
+            var all = await _service.GetAllAsync();
+            foreach (var u in all.Where(u => u.Role == "User"))
+            {
+                u.CanImportFlyer = req.CanImportFlyer;
+                await _service.UpdateAsync(u);
+            }
+            return Ok(new { updated = all.Count(u => u.Role == "User") });
+        }
+
         [HttpDelete("{id}")]
         [SwaggerOperation(Summary = "Supprime un utilisateur")]
         public async Task<IActionResult> Delete(int id)

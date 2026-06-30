@@ -17,5 +17,6 @@ namespace QabrWebApp.Domain.Models
         public DateTime DateInscription { get; set; }
         public string Role { get; set; } = "User";
         public string Language { get; set; } = "fr";
+        public bool CanImportFlyer { get; set; } = false;
     }
 }

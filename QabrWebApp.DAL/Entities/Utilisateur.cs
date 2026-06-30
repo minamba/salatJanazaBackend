@@ -42,6 +42,8 @@ namespace QabrWebApp.Dal.Entities
         [MaxLength(10)]
         public string Language { get; set; } = "fr";
 
+        public bool CanImportFlyer { get; set; } = false;
+
         public ICollection<Abonnement> Abonnements { get; set; } = [];
         public ICollection<PriereJanaza> PrieresDeclarees { get; set; } = [];
     }

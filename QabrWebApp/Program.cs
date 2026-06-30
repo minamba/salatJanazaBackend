@@ -91,6 +91,10 @@ builder.Services.AddScoped<IAbonnementViewModelBuilder, AbonnementViewModelBuild
 builder.Services.AddHostedService<PriereJanazaCleanupService>();
 builder.Services.AddHostedService<RappelPushBackgroundService>();
 
+// Import flyer services
+builder.Services.AddSingleton<IImportSessionService, ImportSessionService>();
+builder.Services.AddSingleton<IFlyerStorageService, GoogleFlyerStorageService>();
+
 // Infrastructure services
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddHttpClient<IOverpassService, OverpassService>(c =>
@@ -161,6 +165,17 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// Exposer le dossier flyers en dehors de wwwroot si besoin
+var flyersPath = builder.Configuration["Flyers:StoragePath"];
+if (!string.IsNullOrEmpty(flyersPath) && Directory.Exists(flyersPath))
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(flyersPath),
+        RequestPath = "/flyers"
+    });
+}
 app.MapControllers();
 app.MapFallbackToFile("index.html");
 

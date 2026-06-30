@@ -54,6 +54,7 @@ namespace QabrWebApp.Dal.Repositories
             entity.NotifMouvement = utilisateur.NotifMouvement;
             entity.Role = utilisateur.Role;
             entity.Language = utilisateur.Language;
+            entity.CanImportFlyer = utilisateur.CanImportFlyer;
             await _ctx.SaveChangesAsync();
             return ToModel(entity);
         }
@@ -73,6 +74,7 @@ namespace QabrWebApp.Dal.Repositories
             LatitudeDomicile = e.LatitudeDomicile, LongitudeDomicile = e.LongitudeDomicile,
             RayonNotification = e.RayonNotification, NotifMouvement = e.NotifMouvement,
             DateInscription = e.DateInscription, Role = e.Role, Language = e.Language,
+            CanImportFlyer = e.CanImportFlyer,
         };
 
         private static Utilisateur ToEntity(DomainModel.Utilisateur u) => new()

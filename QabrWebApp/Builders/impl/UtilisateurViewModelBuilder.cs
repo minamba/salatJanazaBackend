@@ -21,6 +21,7 @@ namespace QabrWebApp.Builders.impl
             DateInscription = utilisateur.DateInscription,
             Role = utilisateur.Role,
             Language = utilisateur.Language,
+            CanImportFlyer = utilisateur.CanImportFlyer,
         };
 
         public List<UtilisateurViewModel> BuildList(List<Utilisateur> utilisateurs)

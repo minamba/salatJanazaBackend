@@ -57,6 +57,12 @@ namespace QabrWebApp.Services
                 body,
                 data = new { priereId = priere.Id, mosqueeId },
                 sound = "default",
+                // Android 8+ : le canal doit correspondre à celui créé sur l'appareil.
+                // Sans channelId, FCM peut rejeter silencieusement la notification.
+                channelId = "default",
+                // priority "high" = FCM high priority → réveille l'appareil immédiatement.
+                // Sans ça, Android peut retarder ou grouper les notifications.
+                priority = "high",
             }).ToList();
 
             await SendBatchAsync(messages);
@@ -78,13 +84,13 @@ namespace QabrWebApp.Services
 
         public Task SendToTokensAsync(IEnumerable<string> tokens, string title, string body, object? data = null)
         {
-            var messages = tokens.Select(token => new { to = token, title, body, data, sound = "default" }).ToList();
+            var messages = tokens.Select(token => new { to = token, title, body, data, sound = "default", channelId = "default", priority = "high" }).ToList();
             return SendBatchAsync(messages);
         }
 
         public async Task SendToTokenAsync(string expoToken, string title, string body, object? data = null)
         {
-            var message = new { to = expoToken, title, body, data, sound = "default" };
+            var message = new { to = expoToken, title, body, data, sound = "default", channelId = "default", priority = "high" };
             await SendBatchAsync([message]);
         }
 

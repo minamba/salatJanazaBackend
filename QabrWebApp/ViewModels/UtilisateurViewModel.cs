@@ -20,5 +20,6 @@ namespace QabrWebApp.ViewModels
         [JsonPropertyName("_role")]
         public string Role { get; set; } = "User";
         public string Language { get; set; } = "fr";
+        public bool CanImportFlyer { get; set; } = false;
     }
 }
