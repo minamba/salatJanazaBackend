@@ -1,6 +1,6 @@
 namespace QabrWebApp.Domain.Models
 {
-    public enum StatutPriere { AVenir, EnCours, Terminee }
+    public enum StatutPriere { AVenir, EnCours, Terminee, EnAttente }
 
     public class PriereJanaza
     {

@@ -17,13 +17,19 @@ namespace QabrWebApp.Controllers
         private readonly IMosqueeViewModelBuilder _builder;
         private readonly IOverpassService _overpass;
         private readonly IEmailService _email;
+        private readonly IPriereJanazaService _priereService;
+        private readonly IPushNotificationService _push;
+        private readonly IMosqueeDeduplicationService _dedup;
 
-        public MosqueeController(IMosqueeService service, IMosqueeViewModelBuilder builder, IOverpassService overpass, IEmailService email)
+        public MosqueeController(IMosqueeService service, IMosqueeViewModelBuilder builder, IOverpassService overpass, IEmailService email, IPriereJanazaService priereService, IPushNotificationService push, IMosqueeDeduplicationService dedup)
         {
             _service = service;
             _builder = builder;
             _overpass = overpass;
             _email = email;
+            _priereService = priereService;
+            _push = push;
+            _dedup = dedup;
         }
 
         [HttpGet]
@@ -159,12 +165,24 @@ namespace QabrWebApp.Controllers
         }
 
         [HttpPut("{id}/valider")]
-        [SwaggerOperation(Summary = "Valide une mosquée en attente")]
+        [SwaggerOperation(Summary = "Valide une mosquée en attente et publie les janazas liées")]
         public async Task<IActionResult> Valider(int id)
         {
             var existing = await _service.GetByIdAsync(id);
             if (existing is null) return NotFound();
             await _service.ValiderAsync(id);
+
+            var linked = (await _priereService.GetPendingAsync()).Where(p => p.MosqueeId == id).ToList();
+            if (linked.Count > 0)
+            {
+                await _priereService.ActivatePendingByMosqueeAsync(id);
+                foreach (var priere in linked)
+                {
+                    _ = _push.NotifyMosqueeSubscribersAsync(id, priere);
+                    _ = _push.ScheduleMosqueeReminderAsync(id, priere);
+                }
+            }
+
             return NoContent();
         }
 
@@ -191,6 +209,14 @@ namespace QabrWebApp.Controllers
             if (existing is null) return NotFound();
             await _service.DeleteAsync(id);
             return NoContent();
+        }
+
+        [HttpPost("deduplicate")]
+        [SwaggerOperation(Summary = "Supprime les mosquées en doublon (même coordonnées GPS), conserve la plus récente")]
+        public async Task<IActionResult> Deduplicate(CancellationToken ct)
+        {
+            var (groupes, supprimees) = await _dedup.SupprimerDoublonsAsync(ct);
+            return Ok(new { groupesTraites = groupes, mosqueesSupprimees = supprimees });
         }
 
         private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)

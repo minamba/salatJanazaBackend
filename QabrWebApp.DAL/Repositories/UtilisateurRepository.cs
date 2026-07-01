@@ -65,6 +65,25 @@ namespace QabrWebApp.Dal.Repositories
             if (entity is not null) { _ctx.Utilisateurs.Remove(entity); await _ctx.SaveChangesAsync(); }
         }
 
+        public async Task<int> BulkSetCanImportFlyerAsync(bool canImportFlyer)
+        {
+            return await _ctx.Utilisateurs
+                .Where(u => u.Role == "User")
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.CanImportFlyer, canImportFlyer));
+        }
+
+        public Task<List<string>> GetExpoTokensPageAsync(string role, int offset, int limit)
+        {
+            return _ctx.Utilisateurs
+                .AsNoTracking()
+                .Where(u => u.Role == role && u.ExpoToken != null && u.ExpoToken != "")
+                .OrderBy(u => u.Id)
+                .Skip(offset)
+                .Take(limit)
+                .Select(u => u.ExpoToken!)
+                .ToListAsync();
+        }
+
         private static DomainModel.Utilisateur ToModel(Utilisateur e) => new()
         {
             Id = e.Id, IdentityUserId = e.IdentityUserId,

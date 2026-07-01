@@ -90,6 +90,10 @@ builder.Services.AddScoped<IAbonnementViewModelBuilder, AbonnementViewModelBuild
 // Background services
 builder.Services.AddHostedService<PriereJanazaCleanupService>();
 builder.Services.AddHostedService<RappelPushBackgroundService>();
+builder.Services.AddHostedService<MosqueeDeduplicationBackgroundService>();
+
+// Deduplication service
+builder.Services.AddScoped<IMosqueeDeduplicationService, MosqueeDeduplicationService>();
 
 // Import flyer services
 builder.Services.AddSingleton<IImportSessionService, ImportSessionService>();

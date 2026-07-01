@@ -22,8 +22,10 @@ namespace QabrWebApp.Controllers
         private readonly IConfiguration _config;
         private readonly ILogger<UtilisateurController> _logger;
         private readonly IUtilisateurTokenRepository _tokenRepo;
+        private readonly IPushNotificationService _push;
+        private readonly IServiceScopeFactory _scopeFactory;
 
-        public UtilisateurController(IUtilisateurService service, IUtilisateurViewModelBuilder builder, IEmailService emailService, IHttpClientFactory httpClientFactory, IConfiguration config, ILogger<UtilisateurController> logger, IUtilisateurTokenRepository tokenRepo)
+        public UtilisateurController(IUtilisateurService service, IUtilisateurViewModelBuilder builder, IEmailService emailService, IHttpClientFactory httpClientFactory, IConfiguration config, ILogger<UtilisateurController> logger, IUtilisateurTokenRepository tokenRepo, IPushNotificationService push, IServiceScopeFactory scopeFactory)
         {
             _service = service;
             _builder = builder;
@@ -32,6 +34,8 @@ namespace QabrWebApp.Controllers
             _config = config;
             _logger = logger;
             _tokenRepo = tokenRepo;
+            _push = push;
+            _scopeFactory = scopeFactory;
         }
 
         [HttpGet]
@@ -229,21 +233,46 @@ namespace QabrWebApp.Controllers
             var existing = await _service.GetByIdAsync(id);
             if (existing is null) return NotFound();
             existing.CanImportFlyer = req.CanImportFlyer;
-            await _service.UpdateAsync(existing);
-            return Ok(_builder.Build(existing));
+            var updated = await _service.UpdateAsync(existing);
+
+            // Notification silencieuse immédiate si l'utilisateur a un token Expo
+            if (!string.IsNullOrEmpty(updated.ExpoToken))
+            {
+                _ = Task.Run(() => _push.SendPermissionUpdateAsync(updated.ExpoToken, updated.CanImportFlyer));
+            }
+
+            return Ok(_builder.Build(updated));
         }
 
         [HttpPut("import-flyer/bulk")]
         [SwaggerOperation(Summary = "Active ou désactive la permission d'import flyer pour tous les utilisateurs")]
         public async Task<IActionResult> SetImportFlyerBulk([FromBody] SetImportFlyerRequest req)
         {
-            var all = await _service.GetAllAsync();
-            foreach (var u in all.Where(u => u.Role == "User"))
+            // Une seule requête SQL UPDATE — répond immédiatement
+            int updated = await _service.BulkSetCanImportFlyerAsync(req.CanImportFlyer);
+
+            // Envoi des notifs en arrière-plan : lit les tokens page par page (5 000 à la fois)
+            // pour ne jamais charger 1M d'entrées en mémoire simultanément
+            bool canImportFlyer = req.CanImportFlyer;
+            _ = Task.Run(async () =>
             {
-                u.CanImportFlyer = req.CanImportFlyer;
-                await _service.UpdateAsync(u);
-            }
-            return Ok(new { updated = all.Count(u => u.Role == "User") });
+                using var scope = _scopeFactory.CreateScope();
+                var svc = scope.ServiceProvider.GetRequiredService<IUtilisateurService>();
+                var push = scope.ServiceProvider.GetRequiredService<IPushNotificationService>();
+
+                const int PageSize = 5_000;
+                int offset = 0;
+                while (true)
+                {
+                    var page = await svc.GetExpoTokensPageAsync("User", offset, PageSize);
+                    if (page.Count == 0) break;
+                    await push.SendPermissionUpdateToManyAsync(page, canImportFlyer);
+                    if (page.Count < PageSize) break;
+                    offset += PageSize;
+                }
+            });
+
+            return Ok(new { updated });
         }
 
         [HttpDelete("{id}")]

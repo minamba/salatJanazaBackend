@@ -19,10 +19,15 @@ namespace QabrWebApp.Domain.Services.impl
 
         public Task<List<PriereJanaza>> GetUpcomingAsync() => _repo.GetUpcomingAsync();
 
+        public Task<List<PriereJanaza>> GetPendingAsync() => _repo.GetPendingAsync();
+
+        public Task ActivatePendingByMosqueeAsync(int mosqueeId) => _repo.ActivatePendingByMosqueeAsync(mosqueeId);
+
         public Task<PriereJanaza> CreateAsync(PriereJanaza priere)
         {
             priere.DateCreation = DateTime.UtcNow;
-            priere.Statut = priere.DateHeurePriere > DateTime.UtcNow ? StatutPriere.AVenir : StatutPriere.EnCours;
+            if (priere.Statut != StatutPriere.EnAttente)
+                priere.Statut = priere.DateHeurePriere > DateTime.UtcNow ? StatutPriere.AVenir : StatutPriere.EnCours;
             return _repo.CreateAsync(priere);
         }
 

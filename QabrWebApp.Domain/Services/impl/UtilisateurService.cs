@@ -24,5 +24,9 @@ namespace QabrWebApp.Domain.Services.impl
         public Task<Utilisateur> UpdateAsync(Utilisateur utilisateur) => _repo.UpdateAsync(utilisateur);
 
         public Task DeleteAsync(int id) => _repo.DeleteAsync(id);
+
+        public Task<int> BulkSetCanImportFlyerAsync(bool canImportFlyer) => _repo.BulkSetCanImportFlyerAsync(canImportFlyer);
+
+        public Task<List<string>> GetExpoTokensPageAsync(string role, int offset, int limit) => _repo.GetExpoTokensPageAsync(role, offset, limit);
     }
 }

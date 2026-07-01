@@ -57,10 +57,33 @@ namespace QabrWebApp.Dal.Repositories
             var entities = await _ctx.PrieresJanaza
                 .Include(p => p.Mosquee)
                 .AsNoTracking()
-                .Where(p => p.DateHeurePriere >= now || p.Statut == EntityStatut.EnCours)
+                .Where(p => (p.DateHeurePriere >= now || p.Statut == EntityStatut.EnCours) && p.Statut != EntityStatut.EnAttente)
                 .OrderBy(p => p.DateHeurePriere)
                 .ToListAsync();
             return entities.Select(ToModel).ToList();
+        }
+
+        public async Task<List<DomainModel.PriereJanaza>> GetPendingAsync()
+        {
+            var entities = await _ctx.PrieresJanaza
+                .Include(p => p.Mosquee)
+                .AsNoTracking()
+                .Where(p => p.Statut == EntityStatut.EnAttente)
+                .OrderBy(p => p.DateCreation)
+                .ToListAsync();
+            return entities.Select(ToModel).ToList();
+        }
+
+        public async Task ActivatePendingByMosqueeAsync(int mosqueeId)
+        {
+            var now = DateTime.UtcNow;
+            var pending = await _ctx.PrieresJanaza
+                .Where(p => p.MosqueeId == mosqueeId && p.Statut == EntityStatut.EnAttente)
+                .ToListAsync();
+            foreach (var p in pending)
+                p.Statut = p.DateHeurePriere > now ? EntityStatut.AVenir : EntityStatut.EnCours;
+            if (pending.Count > 0)
+                await _ctx.SaveChangesAsync();
         }
 
         public async Task<DomainModel.PriereJanaza> CreateAsync(DomainModel.PriereJanaza priere)
@@ -130,6 +153,7 @@ namespace QabrWebApp.Dal.Repositories
         {
             EntityStatut.EnCours => DomainStatut.EnCours,
             EntityStatut.Terminee => DomainStatut.Terminee,
+            EntityStatut.EnAttente => DomainStatut.EnAttente,
             _ => DomainStatut.AVenir,
         };
 
@@ -137,6 +161,7 @@ namespace QabrWebApp.Dal.Repositories
         {
             DomainStatut.EnCours => EntityStatut.EnCours,
             DomainStatut.Terminee => EntityStatut.Terminee,
+            DomainStatut.EnAttente => EntityStatut.EnAttente,
             _ => EntityStatut.AVenir,
         };
     }

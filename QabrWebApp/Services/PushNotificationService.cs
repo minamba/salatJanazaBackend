@@ -94,31 +94,63 @@ namespace QabrWebApp.Services
             await SendBatchAsync([message]);
         }
 
+        public async Task SendPermissionUpdateAsync(string expoToken, bool canImportFlyer)
+        {
+            // Notification silencieuse : pas de titre/body/son → aucune UI côté utilisateur.
+            // _contentAvailable réveille l'app iOS en arrière-plan.
+            var message = new
+            {
+                to = expoToken,
+                data = new { type = "PERMISSION_UPDATED", canImportFlyer },
+                _contentAvailable = true,
+                priority = "high",
+            };
+            await SendBatchAsync([message]);
+        }
+
+        public Task SendPermissionUpdateToManyAsync(IEnumerable<string> expoTokens, bool canImportFlyer)
+        {
+            // SendBatchAsync découpe automatiquement en chunks de 100
+            var messages = expoTokens
+                .Where(t => !string.IsNullOrEmpty(t))
+                .Select(token => new
+                {
+                    to = token,
+                    data = new { type = "PERMISSION_UPDATED", canImportFlyer },
+                    _contentAvailable = true,
+                    priority = "high",
+                });
+            return SendBatchAsync(messages);
+        }
+
         private const int ChunkSize = 100;
         private static readonly TimeSpan ChunkDelay = TimeSpan.FromMilliseconds(100);
 
         private async Task SendBatchAsync<T>(IEnumerable<T> messages)
         {
-            var chunks = messages.Chunk(ChunkSize).ToList();
-            for (int i = 0; i < chunks.Count; i++)
+            // Itération lazy : un chunk est sérialisé et envoyé, puis libéré avant le suivant.
+            // Jamais tous les chunks en mémoire simultanément.
+            int chunkIndex = 0;
+            bool first = true;
+            foreach (var chunk in messages.Chunk(ChunkSize))
             {
+                if (!first) await Task.Delay(ChunkDelay);
+                first = false;
+                chunkIndex++;
                 try
                 {
-                    var content = new StringContent(JsonSerializer.Serialize(chunks[i], _json), Encoding.UTF8, "application/json");
+                    var content = new StringContent(JsonSerializer.Serialize(chunk, _json), Encoding.UTF8, "application/json");
                     var response = await _http.PostAsync("https://exp.host/--/api/v2/push/send", content);
                     var responseBody = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode)
-                        _logger.LogWarning("Expo Push API returned {StatusCode} (chunk {i}/{total}): {body}", response.StatusCode, i + 1, chunks.Count, responseBody);
+                        _logger.LogWarning("Expo Push API returned {StatusCode} (chunk {Index}): {body}", response.StatusCode, chunkIndex, responseBody);
                     else
-                        _logger.LogInformation("Expo Push chunk {i}/{total} OK: {body}", i + 1, chunks.Count, responseBody);
+                        _logger.LogInformation("Expo Push chunk {Index} OK", chunkIndex);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Erreur lors de l'envoi du chunk {i}/{total}", i + 1, chunks.Count);
+                    _logger.LogError(ex, "Erreur lors de l'envoi du chunk {Index}", chunkIndex);
                 }
-
-                if (i < chunks.Count - 1)
-                    await Task.Delay(ChunkDelay);
             }
         }
     }

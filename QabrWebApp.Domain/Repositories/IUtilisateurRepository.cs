@@ -10,5 +10,7 @@ namespace QabrWebApp.Domain.Repositories
         Task<Utilisateur> CreateAsync(Utilisateur utilisateur);
         Task<Utilisateur> UpdateAsync(Utilisateur utilisateur);
         Task DeleteAsync(int id);
+        Task<int> BulkSetCanImportFlyerAsync(bool canImportFlyer);
+        Task<List<string>> GetExpoTokensPageAsync(string role, int offset, int limit);
     }
 }

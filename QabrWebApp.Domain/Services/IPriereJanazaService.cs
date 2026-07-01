@@ -9,6 +9,8 @@ namespace QabrWebApp.Domain.Services
         Task<List<PriereJanaza>> GetByMosqueeIdAsync(int mosqueeId);
         Task<List<PriereJanaza>> GetByUtilisateurIdAsync(int utilisateurId);
         Task<List<PriereJanaza>> GetUpcomingAsync();
+        Task<List<PriereJanaza>> GetPendingAsync();
+        Task ActivatePendingByMosqueeAsync(int mosqueeId);
         Task<PriereJanaza> CreateAsync(PriereJanaza priere);
         Task<PriereJanaza> UpdateAsync(PriereJanaza priere);
         Task DeleteAsync(int id);

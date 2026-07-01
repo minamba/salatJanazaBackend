@@ -45,6 +45,7 @@ namespace QabrWebApp.Controllers
         private readonly IConfiguration _config;
         private readonly IImportSessionService _importSessions;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IEmailService _email;
 
         public PriereJanazaController(
             IPriereJanazaService service,
@@ -53,7 +54,8 @@ namespace QabrWebApp.Controllers
             IMosqueeService mosqueeService,
             IConfiguration config,
             IImportSessionService importSessions,
-            IHttpClientFactory httpClientFactory)
+            IHttpClientFactory httpClientFactory,
+            IEmailService email)
         {
             _service = service;
             _builder = builder;
@@ -62,6 +64,7 @@ namespace QabrWebApp.Controllers
             _config = config;
             _importSessions = importSessions;
             _httpClientFactory = httpClientFactory;
+            _email = email;
         }
 
         [HttpGet]
@@ -104,10 +107,21 @@ namespace QabrWebApp.Controllers
             return Ok(_builder.BuildList(list));
         }
 
+        [HttpGet("en-attente")]
+        [SwaggerOperation(Summary = "Prières en attente de validation de lieu")]
+        public async Task<IActionResult> GetPending()
+        {
+            var list = await _service.GetPendingAsync();
+            return Ok(_builder.BuildList(list));
+        }
+
         [HttpPost]
         [SwaggerOperation(Summary = "Déclare une prière funéraire et notifie les abonnés")]
         public async Task<IActionResult> Create([FromBody] PriereJanazaRequest req)
         {
+            var mosquee = await _mosqueeService.GetByIdAsync(req.MosqueeId);
+            var mosqueeEnAttente = mosquee?.Statut == "EnAttente";
+
             var priere = new PriereJanaza
             {
                 MosqueeId = req.MosqueeId,
@@ -122,11 +136,43 @@ namespace QabrWebApp.Controllers
                 AnneeNaissance = req.AnneeNaissance,
                 AnneeDeces = req.AnneeDeces,
                 UtcOffsetMinutes = req.UtcOffsetMinutes,
+                Statut = mosqueeEnAttente ? StatutPriere.EnAttente : StatutPriere.AVenir,
             };
 
             var created = await _service.CreateAsync(priere);
-            await _push.NotifyMosqueeSubscribersAsync(req.MosqueeId, created);
-            await _push.ScheduleMosqueeReminderAsync(req.MosqueeId, created);
+
+            if (!mosqueeEnAttente)
+            {
+                await _push.NotifyMosqueeSubscribersAsync(req.MosqueeId, created);
+                await _push.ScheduleMosqueeReminderAsync(req.MosqueeId, created);
+            }
+            else
+            {
+                var supportEmail = _config["EmailSettings:RecipientEmail"] ?? "support@salatjanaza.org";
+                var defunt = (req.EstAnonyme == true || string.IsNullOrWhiteSpace(req.NomDefunt))
+                    ? "Défunt(e) anonyme"
+                    : req.NomDefunt;
+                var dateStr = req.DateHeurePriere.ToString("dd/MM/yyyy à HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+                var html = new System.Text.StringBuilder();
+                html.AppendLine("<h2>Nouvelle déclaration de janaza en attente</h2>");
+                html.AppendLine("<p>Une janaza a été déclarée pour un lieu qui n'a pas encore été validé.</p>");
+                html.AppendLine("<hr/>");
+                html.AppendLine("<h3>Lieu (en attente de validation)</h3>");
+                html.AppendLine($"<p><strong>Nom :</strong> {mosquee?.Nom ?? "—"}</p>");
+                html.AppendLine($"<p><strong>Adresse :</strong> {mosquee?.Adresse ?? "—"}</p>");
+                html.AppendLine($"<p><strong>ID lieu :</strong> {req.MosqueeId}</p>");
+                html.AppendLine("<h3>Janaza déclarée</h3>");
+                html.AppendLine($"<p><strong>Défunt(e) :</strong> {defunt}</p>");
+                html.AppendLine($"<p><strong>Date de la prière :</strong> {dateStr} UTC</p>");
+                html.AppendLine($"<p><strong>ID janaza :</strong> {created.Id}</p>");
+                html.AppendLine("<hr/>");
+                html.AppendLine("<p>Connectez-vous à l'interface admin → Déclarations → En attente pour valider ou refuser ce lieu. La janaza sera publiée automatiquement dès la validation.</p>");
+
+                _ = _email.SendNotificationAsync(supportEmail,
+                    $"[Salat Janaza] Déclaration en attente – lieu à valider : {mosquee?.Nom ?? $"ID {req.MosqueeId}"}",
+                    html.ToString());
+            }
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, _builder.Build(created));
         }

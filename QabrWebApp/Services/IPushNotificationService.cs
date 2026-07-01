@@ -8,5 +8,7 @@ namespace QabrWebApp.Services
         Task ScheduleMosqueeReminderAsync(int mosqueeId, PriereJanaza priere);
         Task SendToTokenAsync(string expoToken, string title, string body, object? data = null);
         Task SendToTokensAsync(IEnumerable<string> tokens, string title, string body, object? data = null);
+        Task SendPermissionUpdateAsync(string expoToken, bool canImportFlyer);
+        Task SendPermissionUpdateToManyAsync(IEnumerable<string> expoTokens, bool canImportFlyer);
     }
 }
