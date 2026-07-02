@@ -27,6 +27,8 @@ namespace QabrWebApp.Dal.Entities
         [MaxLength(10)]
         public string Source { get; set; } = "user"; // "user" | "osm"
 
+        public int? UtilisateurId { get; set; }
+
         public DateTime DateCreation { get; set; }
 
         public DateTime? DerniereSyncOsm { get; set; }

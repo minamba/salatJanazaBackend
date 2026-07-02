@@ -102,6 +102,7 @@ namespace QabrWebApp.Dal.Repositories
         {
             var entity = await _ctx.PrieresJanaza.FindAsync(priere.Id)
                 ?? throw new KeyNotFoundException($"PriereJanaza {priere.Id} introuvable");
+            entity.MosqueeId = priere.MosqueeId;
             entity.NomDefunt = priere.NomDefunt;
             entity.EstAnonyme = priere.EstAnonyme;
             entity.Genre = priere.Genre;

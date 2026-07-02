@@ -4,6 +4,7 @@ namespace QabrWebApp.Domain.Repositories
 {
     public interface IMosqueeRepository
     {
+        Task<NormalisationResult> NormaliserSansNomAsync();
         Task<List<Mosquee>> GetAllAsync();
         Task<List<Mosquee>> GetPendingAsync();
         Task<List<Mosquee>> GetContributionsAsync();

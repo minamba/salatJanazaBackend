@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using QabrWebApp.Dal.Entities;
 using QabrWebApp.Domain.Repositories;
@@ -8,6 +10,8 @@ namespace QabrWebApp.Dal.Repositories
     public class MosqueeRepository : IMosqueeRepository
     {
         private readonly QabrWebAppDatabaseContext _ctx;
+        private static readonly System.Net.Http.HttpClient _geoHttp = new();
+        private readonly Dictionary<string, string?> _cpCache = new();
 
         public MosqueeRepository(QabrWebAppDatabaseContext ctx) => _ctx = ctx;
 
@@ -117,22 +121,53 @@ namespace QabrWebApp.Dal.Repositories
                         }
                         // Si elle a déjà un OsmId différent, c'est une mosquée distincte — on ignore
                     }
-                    else if (IsValidForStorage(m))
+                    else
                     {
-                        var newMosque = new Mosquee
+                        // Coordonnées exactes déjà en base → skip
+                        var exactMatch = nearbyEntities.Any(e =>
+                            e.Latitude == m.Latitude && e.Longitude == m.Longitude);
+
+                        // Dans un rayon de 20m d'une mosquée existante → skip
+                        var tooClose = !exactMatch && nearbyEntities.Any(e =>
+                            HaversineKm(m.Latitude, m.Longitude, e.Latitude, e.Longitude) <= 0.020);
+
+                        // Adresse valide obligatoire : nom de rue + code postal
+                        if (!exactMatch && !tooClose && IsValidForStorage(m))
                         {
-                            Nom = m.Nom,
-                            Adresse = m.Adresse,
-                            Latitude = m.Latitude,
-                            Longitude = m.Longitude,
-                            OsmId = m.OsmId,
-                            Source = "osm",
-                            Statut = "Validee",
-                            DateCreation = DateTime.UtcNow,
-                            DerniereSyncOsm = DateTime.UtcNow,
-                        };
-                        _ctx.Mosquees.Add(newMosque);
-                        nearbyEntities.Add(newMosque); // évite doublons dans le même batch
+                            var nom = m.Nom;
+                            var adresse = m.Adresse;
+
+                            // Mosquée générique sans ville → résolution depuis le code postal
+                            if (nom == "Mosquée" && ExtractVille(adresse) == null)
+                            {
+                                var cp = Regex.Match(adresse ?? "", @"\d{5}").Value;
+                                var ville = string.IsNullOrEmpty(cp) ? null : await LookupVilleParCPAsync(cp);
+                                if (ville != null)
+                                {
+                                    nom = $"Mosquée {PrepDe(ville)}{ville}";
+                                    adresse = $"{adresse?.TrimEnd().TrimEnd(',')}, {ville}";
+                                }
+                                else
+                                {
+                                    continue; // ville introuvable → on ne stocke pas
+                                }
+                            }
+
+                            var newMosque = new Mosquee
+                            {
+                                Nom = nom,
+                                Adresse = adresse,
+                                Latitude = m.Latitude,
+                                Longitude = m.Longitude,
+                                OsmId = m.OsmId,
+                                Source = "osm",
+                                Statut = "Validee",
+                                DateCreation = DateTime.UtcNow,
+                                DerniereSyncOsm = DateTime.UtcNow,
+                            };
+                            _ctx.Mosquees.Add(newMosque);
+                            nearbyEntities.Add(newMosque); // évite doublons dans le même batch
+                        }
                     }
                 }
             }
@@ -223,10 +258,111 @@ namespace QabrWebApp.Dal.Repositories
         }
 
         private static bool IsValidForStorage(DomainModel.Mosquee m)
-            => !string.IsNullOrWhiteSpace(m.Adresse)
+            => HasValidStreetAndPostal(m.Adresse)
             && m.Latitude is >= -90 and <= 90
             && m.Longitude is >= -180 and <= 180
             && (m.Latitude != 0 || m.Longitude != 0);
+
+        // Résout le nom de la commune depuis un code postal via geo.api.gouv.fr
+        // Le résultat est mis en cache pour éviter des appels répétés dans le même batch
+        private async Task<string?> LookupVilleParCPAsync(string codePostal)
+        {
+            if (_cpCache.TryGetValue(codePostal, out var cached)) return cached;
+            try
+            {
+                var json = await _geoHttp.GetStringAsync(
+                    $"https://geo.api.gouv.fr/communes?codePostal={codePostal}&fields=nom&limit=1");
+                var doc = JsonDocument.Parse(json);
+                var ville = doc.RootElement.EnumerateArray().FirstOrDefault().TryGetProperty("nom", out var p)
+                    ? TitreCasser(p.GetString() ?? "")
+                    : null;
+                _cpCache[codePostal] = ville;
+                return ville;
+            }
+            catch { _cpCache[codePostal] = null; return null; }
+        }
+
+        // Adresse valide = code postal français (5 chiffres) + quelque chose avant (rue)
+        private static bool HasValidStreetAndPostal(string? adresse)
+        {
+            if (string.IsNullOrWhiteSpace(adresse)) return false;
+            var cp = Regex.Match(adresse, @"\d{5}");
+            if (!cp.Success) return false;
+            var avantCP = adresse[..cp.Index].Trim().Trim(',', ' ');
+            return avantCP.Length >= 3;
+        }
+
+        // Extrait la ville d'une adresse française : "5 Rue X, 91000 Évry" → "Évry"
+        private static string? ExtractVille(string? adresse)
+        {
+            if (string.IsNullOrWhiteSpace(adresse)) return null;
+            var m = Regex.Match(adresse, @"\d{5}\s*,?\s*([^,\n]+)");
+            if (!m.Success) return null;
+            var ville = Regex.Replace(m.Groups[1].Value, @",.*$", "").Trim().TrimEnd('.', ' ');
+            return string.IsNullOrWhiteSpace(ville) ? null : TitreCasser(ville);
+        }
+
+        // "Saint-Michel-Sur-Orge" → "Saint-Michel-sur-Orge" (capitalise chaque segment)
+        private static string TitreCasser(string s) =>
+            string.Join(" ", s.Trim()
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(word => string.Join("-", word.Split('-')
+                    .Select(p => p.Length == 0 ? p : char.ToUpper(p[0]) + (p.Length > 1 ? p[1..].ToLower() : "")))));
+
+        // "Évry" → "d'" ; "Saint-Michel" → "de "
+        private static string PrepDe(string ville)
+        {
+            if (string.IsNullOrEmpty(ville)) return "de ";
+            const string voyelles = "AEIOUYaeiouÀÂÄÉÈÊËÎÏÔÖÙÛÜœæàâäéèêëîïôöùûü";
+            return voyelles.Contains(ville[0]) ? "d'" : "de ";
+        }
+
+        public async Task<DomainModel.NormalisationResult> NormaliserSansNomAsync()
+        {
+            var result = new DomainModel.NormalisationResult();
+
+            var mosquees = await _ctx.Mosquees
+                .Where(m => m.Statut != "Supprimee")
+                .ToListAsync();
+
+            foreach (var mosquee in mosquees)
+            {
+                if (mosquee.Nom == "Mosquée")
+                {
+                    var ville = ExtractVille(mosquee.Adresse);
+                    if (ville != null)
+                    {
+                        var nouveauNom = $"Mosquée {PrepDe(ville)}{ville}";
+                        result.Renommes.Add(new(mosquee.Id, mosquee.Nom, nouveauNom, mosquee.Adresse));
+                        mosquee.Nom = nouveauNom;
+                        continue;
+                    }
+                    // Pas de ville extractible → traité comme adresse invalide ci-dessous
+                }
+                else if (HasValidStreetAndPostal(mosquee.Adresse))
+                {
+                    continue; // nom + adresse valide → rien à faire
+                }
+
+                // Ici : soit nom == "Mosquée" sans ville, soit nom quelconque sans adresse valide
+                var hasJanazas = await _ctx.PrieresJanaza.AnyAsync(p => p.MosqueeId == mosquee.Id);
+                if (hasJanazas)
+                {
+                    mosquee.Statut = "Supprimee";
+                    result.Ignores.Add(new(mosquee.Id, mosquee.Adresse, "Janazas liées — désactivée"));
+                }
+                else
+                {
+                    result.Supprimes.Add(new(mosquee.Id, mosquee.Adresse, $"Adresse invalide ({mosquee.Nom})"));
+                    _ctx.Mosquees.Remove(mosquee);
+                }
+            }
+
+            if (result.Renommes.Count + result.Supprimes.Count + result.Ignores.Count > 0)
+                await _ctx.SaveChangesAsync();
+
+            return result;
+        }
 
         private static DomainModel.Mosquee ToModel(Mosquee e) => new()
         {
@@ -234,6 +370,7 @@ namespace QabrWebApp.Dal.Repositories
             Latitude = e.Latitude, Longitude = e.Longitude,
             OsmId = e.OsmId, Statut = e.Statut, Source = e.Source,
             DateCreation = e.DateCreation, DerniereSyncOsm = e.DerniereSyncOsm,
+            UtilisateurId = e.UtilisateurId,
         };
 
         private static Mosquee ToEntity(DomainModel.Mosquee m) => new()
@@ -242,6 +379,7 @@ namespace QabrWebApp.Dal.Repositories
             Latitude = m.Latitude, Longitude = m.Longitude,
             OsmId = m.OsmId, Statut = m.Statut, Source = m.Source,
             DateCreation = m.DateCreation, DerniereSyncOsm = m.DerniereSyncOsm,
+            UtilisateurId = m.UtilisateurId,
         };
 
         private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)

@@ -71,6 +71,8 @@ namespace QabrWebApp.Domain.Services.impl
 
         public Task<Mosquee> UpdateAsync(Mosquee mosquee) => _repo.UpdateAsync(mosquee);
 
+        public Task<NormalisationResult> NormaliserSansNomAsync() => _repo.NormaliserSansNomAsync();
+
         public Task ValiderAsync(int id) => _repo.ValiderAsync(id);
 
         public Task DeleteAsync(int id) => _repo.DeleteAsync(id);

@@ -287,25 +287,22 @@ namespace QabrWebApp.Controllers
             var language = NormalizeLanguage(existing.Language);
             var identityUserId = existing.IdentityUserId;
 
-            await _service.DeleteAsync(id);
-
             if (!string.IsNullOrEmpty(identityUserId))
             {
-                _ = Task.Run(async () =>
+                try
                 {
-                    try
-                    {
-                        var client = _httpClientFactory.CreateClient("identity");
-                        var apiKey = _config["IdentityServer:InternalApiKey"] ?? "";
-                        var req = new HttpRequestMessage(HttpMethod.Delete, $"/api/auth/account/internal/{identityUserId}");
-                        req.Headers.Add("X-Api-Key", apiKey);
-                        var res = await client.SendAsync(req);
-                        if (!res.IsSuccessStatusCode)
-                            _logger.LogWarning("Suppression Identity échouée pour {Id}: {Status}", identityUserId, res.StatusCode);
-                    }
-                    catch (Exception ex) { _logger.LogError(ex, "Erreur suppression Identity pour {Id}", identityUserId); }
-                });
+                    var client = _httpClientFactory.CreateClient("identity");
+                    var apiKey = _config["IdentityServer:InternalApiKey"] ?? "";
+                    var req = new HttpRequestMessage(HttpMethod.Delete, $"/api/auth/account/internal/{identityUserId}");
+                    req.Headers.Add("X-Api-Key", apiKey);
+                    var res = await client.SendAsync(req);
+                    if (!res.IsSuccessStatusCode)
+                        _logger.LogWarning("Suppression Identity échouée pour {Id}: {Status}", identityUserId, res.StatusCode);
+                }
+                catch (Exception ex) { _logger.LogError(ex, "Erreur suppression Identity pour {Id}", identityUserId); }
             }
+
+            await _service.DeleteAsync(id);
 
             if (!string.IsNullOrEmpty(email))
             {

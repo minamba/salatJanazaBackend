@@ -46,7 +46,9 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 builder.Services.AddDbContext<QabrWebAppDatabaseContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
+           .EnableSensitiveDataLogging()
+           .EnableDetailedErrors());
 
 builder.Services.AddAutoMapper(cfg => cfg.AddProfile<MapperProfile>());
 

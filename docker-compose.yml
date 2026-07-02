@@ -1,5 +1,4 @@
 version: "3.8"
-
 services:
   qabr-api:
     image: mcr.microsoft.com/dotnet/aspnet:8.0
@@ -25,7 +24,7 @@ services:
       - "traefik.http.services.qabr-api.loadbalancer.server.port=5168"
 
   qabr-identity:
-    image: mcr.microsoft.com/dotnet/aspnet:8.0
+    image: mcr.microsoft.com/dotnet/aspnet:9.0
     container_name: qabr-identity
     restart: unless-stopped
     working_dir: /app
@@ -47,6 +46,23 @@ services:
       - "traefik.http.routers.qabr-identity.entrypoints=websecure"
       - "traefik.http.routers.qabr-identity.tls.certresolver=myresolver"
       - "traefik.http.services.qabr-identity.loadbalancer.server.port=5001"
+
+  qabr-web:
+    image: nginx:alpine
+    container_name: qabr-web
+    restart: unless-stopped
+    volumes:
+      - ./app/web:/usr/share/nginx/html:ro
+      - ./web-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.qabr-web.rule=Host(`salatjanaza.org`) || Host(`www.salatjanaza.org`)"
+      - "traefik.http.routers.qabr-web.entrypoints=websecure"
+      - "traefik.http.routers.qabr-web.tls.certresolver=myresolver"
+      - "traefik.http.services.qabr-web.loadbalancer.server.port=80"
 
 volumes:
   identity-keys:

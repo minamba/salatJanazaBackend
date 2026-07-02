@@ -18,6 +18,8 @@ namespace QabrWebApp.Request
 
         [MaxLength(50)]
         public string? OsmId { get; set; }
+
+        public int? UtilisateurId { get; set; }
     }
 
     public class MosqueeNearbyRequest
