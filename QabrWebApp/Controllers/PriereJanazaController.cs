@@ -193,7 +193,10 @@ namespace QabrWebApp.Controllers
             existing.VilleEnterrement = req.VilleEnterrement;
             existing.AnneeNaissance = req.AnneeNaissance;
             existing.AnneeDeces = req.AnneeDeces;
+            existing.UtcOffsetMinutes = req.UtcOffsetMinutes;
             var updated = await _service.UpdateAsync(existing);
+            // Annule l'ancien rappel et en planifie un nouveau avec la nouvelle heure
+            await _push.RescheduleMosqueeReminderAsync(req.MosqueeId, updated);
             return Ok(_builder.Build(updated));
         }
 
@@ -238,15 +241,15 @@ namespace QabrWebApp.Controllers
                 return BadRequest(new { error = geocodingFailed ? "IMAGE_QUALITY" : $"Impossible de trouver ou créer la mosquée \"{req.MosqueeNom}\"." });
             }
 
-            // Conversion heure locale (extraite du flyer) → UTC
-            // Le timezone est déterminé depuis le code pays retourné par Nominatim.
+            // L'heure extraite du flyer est l'heure locale de la mosquée (wall-clock).
+            // On la stocke telle quelle en UTC faussé — affichage = même chiffre partout.
+            // utcOffsetMinutes est conservé pour les notifications (30min avant heure locale).
             var tz = GetTimezoneForCountry(countryCode);
             var utcOffset = tz.GetUtcOffset(req.DateHeurePriere);
-            var utcDate = DateTime.SpecifyKind(req.DateHeurePriere - utcOffset, DateTimeKind.Utc);
+            var utcDate = DateTime.SpecifyKind(req.DateHeurePriere, DateTimeKind.Utc);
             var utcOffsetMinutes = (int)utcOffset.TotalMinutes;
 
             // Slot lock: prevents two concurrent imports for the same mosque+hour
-            // both passing the conflict check before either has written to the DB.
             var lockKey = $"{mosquee.Id}_{utcDate:yyyyMMddHH}";
             var slotLock = _slotLocks.GetOrAdd(lockKey, _ => new SemaphoreSlim(1, 1));
             await slotLock.WaitAsync();

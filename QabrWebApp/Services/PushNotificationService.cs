@@ -45,7 +45,9 @@ namespace QabrWebApp.Services
             var genre = priere.Genre?.ToLower() switch {
                 "homme" => "Homme", "femme" => "Femme", "enfant" => "Enfant", _ => null
             };
-            var dateLocale = priere.DateHeurePriere.AddMinutes(priere.UtcOffsetMinutes);
+            // DateHeurePriere est stocké en wall-clock UTC (= heure locale telle qu'affichée).
+            // Ne pas ajouter utcOffset : la valeur EST déjà l'heure locale.
+            var dateLocale = priere.DateHeurePriere;
 
             var title = "🕌 Salat Janaza";
             var body = $"{defunt}{(genre is not null ? $" ({genre})" : "")} · {mosqueeNom} · {dateLocale:dd/MM à HH:mm}";
@@ -68,9 +70,19 @@ namespace QabrWebApp.Services
             await SendBatchAsync(messages);
         }
 
+        public async Task RescheduleMosqueeReminderAsync(int mosqueeId, PriereJanaza priere)
+        {
+            await _rappelRepo.DeletePendingByPriereIdAsync(priere.Id);
+            await ScheduleMosqueeReminderAsync(mosqueeId, priere);
+        }
+
         public async Task ScheduleMosqueeReminderAsync(int mosqueeId, PriereJanaza priere)
         {
-            var dateEnvoi = priere.DateHeurePriere.AddMinutes(-30);
+            // DateHeurePriere est en wall-clock UTC (= heure locale).
+            // Le vrai UTC de la prière = wall-clock - utcOffset.
+            // Le rappel doit partir 30 min avant le vrai UTC.
+            var trueUtcPrayer = priere.DateHeurePriere.AddMinutes(-priere.UtcOffsetMinutes);
+            var dateEnvoi = trueUtcPrayer.AddMinutes(-30);
             if (dateEnvoi <= DateTime.UtcNow) return;
 
             await _rappelRepo.CreateAsync(new RappelPush

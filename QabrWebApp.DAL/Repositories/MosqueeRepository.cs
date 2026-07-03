@@ -153,6 +153,19 @@ namespace QabrWebApp.Dal.Repositories
                                 }
                             }
 
+                            // Même nom + même adresse déjà en base → skip même si coordonnées différentes
+                            var nomNorm = nom.Trim().ToLowerInvariant();
+                            var adresseNorm = (adresse ?? "").Trim().ToLowerInvariant();
+                            var dupeParAdresse =
+                                nearbyEntities.Any(e =>
+                                    e.Nom.Trim().ToLowerInvariant() == nomNorm &&
+                                    (e.Adresse ?? "").Trim().ToLowerInvariant() == adresseNorm)
+                                || await _ctx.Mosquees.AnyAsync(e =>
+                                    e.Statut != "Supprimee" &&
+                                    e.Nom == nom &&
+                                    e.Adresse == adresse);
+                            if (dupeParAdresse) continue;
+
                             var newMosque = new Mosquee
                             {
                                 Nom = nom,
@@ -355,6 +368,42 @@ namespace QabrWebApp.Dal.Repositories
                 {
                     result.Supprimes.Add(new(mosquee.Id, mosquee.Adresse, $"Adresse invalide ({mosquee.Nom})"));
                     _ctx.Mosquees.Remove(mosquee);
+                }
+            }
+
+            // Passe 2 : déduplication — même nom + même adresse → conserver le plus récent
+            var entitesActives = mosquees.Where(m =>
+                m.Statut != "Supprimee" &&
+                _ctx.Entry(m).State != Microsoft.EntityFrameworkCore.EntityState.Deleted
+            ).ToList();
+
+            var groupesDoublons = entitesActives
+                .Where(m => !string.IsNullOrWhiteSpace(m.Adresse))
+                .GroupBy(m => (
+                    Nom: (m.Nom ?? "").Trim().ToLowerInvariant(),
+                    Adresse: m.Adresse!.Trim().ToLowerInvariant()
+                ))
+                .Where(g => g.Key.Nom.Length > 0 && g.Count() > 1);
+
+            foreach (var groupe in groupesDoublons)
+            {
+                var keeper = groupe
+                    .OrderByDescending(m => m.DateCreation)
+                    .First();
+
+                foreach (var doublon in groupe.Where(m => m.Id != keeper.Id))
+                {
+                    var hasPrieres = await _ctx.PrieresJanaza.AnyAsync(p => p.MosqueeId == doublon.Id);
+                    if (hasPrieres)
+                    {
+                        doublon.Statut = "Supprimee";
+                        result.Ignores.Add(new(doublon.Id, doublon.Adresse, $"Doublon désactivé (gardé #{keeper.Id})"));
+                    }
+                    else
+                    {
+                        result.Supprimes.Add(new(doublon.Id, doublon.Adresse, $"Doublon supprimé (gardé #{keeper.Id})"));
+                        _ctx.Mosquees.Remove(doublon);
+                    }
                 }
             }
 

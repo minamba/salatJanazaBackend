@@ -47,5 +47,15 @@ namespace QabrWebApp.Dal.Repositories
             entity.EnvoyeAt = DateTime.UtcNow;
             await _ctx.SaveChangesAsync();
         }
+
+        public async Task DeletePendingByPriereIdAsync(int priereJanazaId)
+        {
+            var entities = await _ctx.RappelsPush
+                .Where(r => r.PriereJanazaId == priereJanazaId && r.EnvoyeAt == null)
+                .ToListAsync();
+            if (entities.Count == 0) return;
+            _ctx.RappelsPush.RemoveRange(entities);
+            await _ctx.SaveChangesAsync();
+        }
     }
 }

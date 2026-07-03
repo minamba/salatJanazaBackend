@@ -72,7 +72,8 @@ namespace QabrWebApp.Services
                                 var genre = priere.Genre?.ToLower() switch {
                                     "homme" => "Homme", "femme" => "Femme", "enfant" => "Enfant", _ => null
                                 };
-                                var dateLocale = priere.DateHeurePriere.AddMinutes(priere.UtcOffsetMinutes);
+                                // Wall-clock UTC = heure locale telle qu'affichée. Ne pas ajouter l'offset.
+                                var dateLocale = priere.DateHeurePriere;
 
                                 var title = "⏰ Rappel — Salat Janaza dans 30 min";
                                 var body = $"{defunt}{(genre is not null ? $" ({genre})" : "")} · {mosqueeNom} · {dateLocale:HH:mm}";
