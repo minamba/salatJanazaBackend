@@ -25,9 +25,10 @@ namespace QabrWebApp.Dal.Repositories
 
         public async Task<List<DomainModel.RappelPush>> GetPendingAsync()
         {
+            var cutoff = DateTime.UtcNow.AddHours(-2);
             var entities = await _ctx.RappelsPush
                 .AsNoTracking()
-                .Where(r => r.DateEnvoi <= DateTime.UtcNow && r.EnvoyeAt == null)
+                .Where(r => r.DateEnvoi <= DateTime.UtcNow && r.DateEnvoi >= cutoff && r.EnvoyeAt == null)
                 .ToListAsync();
 
             return entities.Select(e => new DomainModel.RappelPush

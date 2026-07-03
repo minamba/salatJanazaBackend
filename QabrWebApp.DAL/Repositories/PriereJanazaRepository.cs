@@ -54,13 +54,16 @@ namespace QabrWebApp.Dal.Repositories
         public async Task<List<DomainModel.PriereJanaza>> GetUpcomingAsync()
         {
             var now = DateTime.UtcNow;
+            var cutoff = now.AddHours(-2);
             var entities = await _ctx.PrieresJanaza
                 .Include(p => p.Mosquee)
                 .AsNoTracking()
-                .Where(p => (p.DateHeurePriere >= now || p.Statut == EntityStatut.EnCours) && p.Statut != EntityStatut.EnAttente)
+                // Retourne les prières dont le vrai UTC est dans les 2h passées ou dans le futur.
+                // Le statut est recalculé dynamiquement au moment du mapping.
+                .Where(p => p.DateHeurePriere.AddMinutes(-p.UtcOffsetMinutes) >= cutoff && p.Statut != EntityStatut.EnAttente)
                 .OrderBy(p => p.DateHeurePriere)
                 .ToListAsync();
-            return entities.Select(ToModel).ToList();
+            return entities.Select(e => ToModelWithComputedStatut(e, now)).ToList();
         }
 
         public async Task<List<DomainModel.PriereJanaza>> GetPendingAsync()
@@ -81,7 +84,7 @@ namespace QabrWebApp.Dal.Repositories
                 .Where(p => p.MosqueeId == mosqueeId && p.Statut == EntityStatut.EnAttente)
                 .ToListAsync();
             foreach (var p in pending)
-                p.Statut = p.DateHeurePriere > now ? EntityStatut.AVenir : EntityStatut.EnCours;
+                p.Statut = p.DateHeurePriere.AddMinutes(-p.UtcOffsetMinutes) > now ? EntityStatut.AVenir : EntityStatut.EnCours;
             if (pending.Count > 0)
                 await _ctx.SaveChangesAsync();
         }
@@ -121,6 +124,19 @@ namespace QabrWebApp.Dal.Repositories
         public async Task DeleteAsync(int id)
         {
             await _ctx.PrieresJanaza.Where(p => p.Id == id).ExecuteDeleteAsync();
+        }
+
+        private static DomainModel.PriereJanaza ToModelWithComputedStatut(PriereJanaza e, DateTime now)
+        {
+            var model = ToModel(e);
+            if (e.Statut != EntityStatut.EnAttente)
+            {
+                var trueUtc = e.DateHeurePriere.AddMinutes(-e.UtcOffsetMinutes);
+                model.Statut = trueUtc > now ? DomainStatut.AVenir
+                             : trueUtc > now.AddHours(-2) ? DomainStatut.EnCours
+                             : DomainStatut.Terminee;
+            }
+            return model;
         }
 
         private static DomainModel.PriereJanaza ToModel(PriereJanaza e) => new()

@@ -27,7 +27,8 @@ namespace QabrWebApp.Domain.Services.impl
         {
             priere.DateCreation = DateTime.UtcNow;
             if (priere.Statut != StatutPriere.EnAttente)
-                priere.Statut = priere.DateHeurePriere > DateTime.UtcNow ? StatutPriere.AVenir : StatutPriere.EnCours;
+                // Comparer le vrai UTC de la prière (wall-clock - offset) avec l'heure actuelle.
+                priere.Statut = priere.DateHeurePriere.AddMinutes(-priere.UtcOffsetMinutes) > DateTime.UtcNow ? StatutPriere.AVenir : StatutPriere.EnCours;
             return _repo.CreateAsync(priere);
         }
 
