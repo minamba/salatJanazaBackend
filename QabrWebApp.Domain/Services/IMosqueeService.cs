@@ -13,6 +13,7 @@ namespace QabrWebApp.Domain.Services
         Task<List<Mosquee>> GetNearbyAsync(double latitude, double longitude, double radiusKm);
         Task<List<Mosquee>> SearchAsync(string query);
         Task<Mosquee> CreateAsync(Mosquee mosquee);
+        Task<Mosquee> ForceCreateAsync(Mosquee mosquee);
         Task<Mosquee> CreateSuggestionAsync(Mosquee mosquee);
         Task<Mosquee> UpsertFromOsmAsync(Mosquee mosquee);
         Task<List<string>> UpsertBulkFromOsmAsync(List<Mosquee> mosquees);

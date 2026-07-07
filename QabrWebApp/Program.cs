@@ -100,6 +100,8 @@ builder.Services.AddScoped<IMosqueeDeduplicationService, MosqueeDeduplicationSer
 // Import flyer services
 builder.Services.AddSingleton<IImportSessionService, ImportSessionService>();
 builder.Services.AddSingleton<IFlyerStorageService, GoogleFlyerStorageService>();
+builder.Services.AddSingleton<ITextImportStorageService, GoogleTextImportStorageService>();
+builder.Services.AddSingleton<ITextImportSummaryService, TextImportSummaryService>();
 
 // Infrastructure services
 builder.Services.AddScoped<IEmailService, EmailService>();

@@ -41,6 +41,13 @@ namespace QabrWebApp.Domain.Services.impl
             return await _repo.CreateAsync(mosquee);
         }
 
+        public Task<Mosquee> ForceCreateAsync(Mosquee mosquee)
+        {
+            mosquee.DateCreation = DateTime.UtcNow;
+            mosquee.Statut = "Validee";
+            return _repo.CreateAsync(mosquee);
+        }
+
         public Task<Mosquee> CreateSuggestionAsync(Mosquee mosquee)
         {
             mosquee.DateCreation = DateTime.UtcNow;

@@ -280,6 +280,12 @@ namespace QabrWebApp.Controllers
                 _logger.LogWarning("Refuser: mosquée {Id} sans UtilisateurId, pas d'email envoyé", id);
             }
 
+            // Supprimer toutes les janazas en attente liées à cette mosquée —
+            // elles n'ont de sens que si la mosquée est validée.
+            var janazasEnAttente = await _priereService.GetByMosqueeIdAsync(id);
+            foreach (var j in janazasEnAttente.Where(j => j.Statut == StatutPriere.EnAttente))
+                await _priereService.DeleteAsync(j.Id);
+
             await _service.DeleteAsync(id);
             return NoContent();
         }

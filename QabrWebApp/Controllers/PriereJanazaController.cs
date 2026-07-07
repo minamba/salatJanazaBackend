@@ -46,6 +46,7 @@ namespace QabrWebApp.Controllers
         private readonly IImportSessionService _importSessions;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IEmailService _email;
+        private readonly ITextImportSummaryService _textImportSummary;
 
         public PriereJanazaController(
             IPriereJanazaService service,
@@ -55,7 +56,8 @@ namespace QabrWebApp.Controllers
             IConfiguration config,
             IImportSessionService importSessions,
             IHttpClientFactory httpClientFactory,
-            IEmailService email)
+            IEmailService email,
+            ITextImportSummaryService textImportSummary)
         {
             _service = service;
             _builder = builder;
@@ -65,6 +67,7 @@ namespace QabrWebApp.Controllers
             _importSessions = importSessions;
             _httpClientFactory = httpClientFactory;
             _email = email;
+            _textImportSummary = textImportSummary;
         }
 
         [HttpGet]
@@ -215,6 +218,110 @@ namespace QabrWebApp.Controllers
             {
                 return StatusCode(500, new { error = ex.Message, inner = ex.InnerException?.Message, type = ex.GetType().Name });
             }
+        }
+
+        [HttpPost("import/text")]
+        [SwaggerOperation(Summary = "Import en masse depuis un fichier texte (même token réutilisable, clé API requise)")]
+        public async Task<IActionResult> ImportText([FromBody] PriereJanazaTextImportRequest req)
+        {
+            var providedKey = Request.Headers["X-Import-Key"].FirstOrDefault();
+            var expectedKey = _config["ImportApiKey"];
+            if (string.IsNullOrEmpty(expectedKey) || providedKey != expectedKey)
+                return Unauthorized(new { error = "Clé API invalide." });
+
+            // Pour l'import texte : chercher d'abord par nom dans toute la base (pas seulement
+            // à proximité GPS) pour éviter que la recherche de proximité retourne une mosquée
+            // différente à cause du fallback géographique.
+            var (mosquee, geocodingFailed, countryCode) = await ResolveOrCreateMosqueeForTextImportAsync(req.MosqueeNom, req.MosqueeAdresse);
+
+            if (mosquee is null)
+            {
+                var skipReason = geocodingFailed ? "GEOCODING_FAILED" : "MOSQUE_NOT_FOUND";
+                _textImportSummary.AddSkip(req.TextImportToken, req.MosqueeNom, req.EstAnonyme ? null : req.NomDefunt, req.DateHeurePriere, skipReason);
+                return Ok(new
+                {
+                    skipped = true,
+                    reason = skipReason,
+                    mosqueeNom = req.MosqueeNom,
+                    nomDefunt = req.EstAnonyme ? null : req.NomDefunt,
+                    dateHeurePriere = req.DateHeurePriere,
+                });
+            }
+
+            var tz = GetTimezoneForCountry(countryCode);
+            var utcOffset = tz.GetUtcOffset(req.DateHeurePriere);
+            var utcDate = DateTime.SpecifyKind(req.DateHeurePriere, DateTimeKind.Utc);
+            var utcOffsetMinutes = (int)utcOffset.TotalMinutes;
+
+            var lockKey = $"{mosquee.Id}_{utcDate:yyyyMMddHHmm}";
+            var slotLock = _slotLocks.GetOrAdd(lockKey, _ => new SemaphoreSlim(1, 1));
+            await slotLock.WaitAsync();
+            bool lockReleased = false;
+            PriereJanaza created;
+            try
+            {
+                var existing = await _service.GetByMosqueeIdAsync(mosquee.Id);
+                var conflict = existing.FirstOrDefault(p =>
+                {
+                    var pd = DateTime.SpecifyKind(p.DateHeurePriere, DateTimeKind.Utc);
+                    return pd.Year == utcDate.Year && pd.Month == utcDate.Month
+                        && pd.Day == utcDate.Day && pd.Hour == utcDate.Hour
+                        && pd.Minute == utcDate.Minute;
+                });
+
+                if (conflict is not null)
+                {
+                    var conflictLabel = conflict.EstAnonyme ? "anonyme" : (conflict.NomDefunt ?? "inconnu(e)");
+                    slotLock.Release();
+                    lockReleased = true;
+                    _textImportSummary.AddSkip(req.TextImportToken, mosquee.Nom, req.EstAnonyme ? null : req.NomDefunt, req.DateHeurePriere, $"SLOT_CONFLICT ({conflictLabel})");
+                    return Ok(new
+                    {
+                        skipped = true,
+                        reason = $"SLOT_CONFLICT ({conflictLabel})",
+                        mosqueeNom = mosquee.Nom,
+                        nomDefunt = req.EstAnonyme ? null : req.NomDefunt,
+                        dateHeurePriere = req.DateHeurePriere,
+                    });
+                }
+
+                var priere = new PriereJanaza
+                {
+                    MosqueeId = mosquee.Id,
+                    UtilisateurId = req.UtilisateurId,
+                    NomDefunt = req.NomDefunt,
+                    EstAnonyme = req.EstAnonyme,
+                    Genre = req.Genre?.ToLowerInvariant(),
+                    DateHeurePriere = utcDate,
+                    Commentaire = req.Commentaire,
+                    PaysEnterrement = req.PaysEnterrement,
+                    VilleEnterrement = req.VilleEnterrement,
+                    AnneeNaissance = req.AnneeNaissance,
+                    AnneeDeces = req.AnneeDeces,
+                    UtcOffsetMinutes = utcOffsetMinutes,
+                };
+
+                created = await _service.CreateAsync(priere);
+            }
+            finally
+            {
+                if (!lockReleased) slotLock.Release();
+            }
+
+            _textImportSummary.AddSuccess(req.TextImportToken, mosquee.Nom);
+
+            await _push.NotifyMosqueeSubscribersAsync(mosquee.Id, created);
+            await _push.ScheduleMosqueeReminderAsync(mosquee.Id, created);
+
+            return CreatedAtAction(nameof(GetById), new { id = created.Id }, new
+            {
+                skipped = false,
+                priereId = created.Id,
+                mosqueeId = mosquee.Id,
+                mosqueeNom = mosquee.Nom,
+                mosqueeAdresse = mosquee.Adresse,
+                textImportToken = req.TextImportToken,
+            });
         }
 
         [HttpPost("import")]
@@ -397,6 +504,120 @@ namespace QabrWebApp.Controllers
                 Source = "import",
             });
             return (created, false, countryCode);
+        }
+
+        // Résolution pour l'import texte uniquement : NE TOUCHE PAS à ResolveOrCreateMosqueeAsync.
+        // Algorithme : 1) cherche par nom dans toute la base, 2) si absent → géocode + crée.
+        // Pas de recherche par proximité GPS pour éviter les faux positifs (mosquées voisines).
+        private async Task<(Mosquee? mosquee, bool geocodingFailed, string? countryCode)> ResolveOrCreateMosqueeForTextImportAsync(string nom, string? adresse)
+        {
+            // 1. Recherche par nom dans toute la base de données
+            var nameResults = await _mosqueeService.SearchAsync(nom);
+            var nameMatches = nameResults.Where(m => MosqueeNamesCompatible(nom, m.Nom)).ToList();
+
+            if (nameMatches.Count > 0)
+            {
+                if (!string.IsNullOrWhiteSpace(adresse))
+                {
+                    // Règle : si une mosquée existante a le même nom ET la même adresse → c'est elle.
+                    // Si aucune adresse en base ne correspond → c'est une nouvelle mosquée, on la crée.
+                    // (Même s'il n'y a qu'un seul candidat de même nom : adresse différente = nouvelle mosquée.)
+                    var addressMatch = nameMatches.FirstOrDefault(m => AddressesMatch(m.Adresse, adresse));
+                    if (addressMatch != null)
+                        return (addressMatch, false, null);
+                    // Aucune adresse ne correspond → fall through vers ForceCreate
+                }
+                else
+                {
+                    // Pas d'adresse fournie : impossible de vérifier → retourner le premier candidat (best-effort)
+                    return (nameMatches[0], false, null);
+                }
+            }
+
+            // 2. Géocoder pour obtenir les coordonnées (nouvelle mosquée ou candidat indéterminable)
+            double? lat = null, lng = null;
+            string? countryCode = null;
+            var city = ExtractCity(adresse);
+
+            var geocodeQueries = new List<string>();
+            if (!string.IsNullOrWhiteSpace(adresse)) geocodeQueries.Add(adresse);
+            if (city != null)                        geocodeQueries.Add($"{nom}, {city}");
+            if (!string.IsNullOrWhiteSpace(adresse)) geocodeQueries.Add($"{nom}, {adresse}");
+
+            var http = _httpClientFactory.CreateClient();
+            http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "QabrApp/1.0");
+
+            foreach (var q in geocodeQueries)
+            {
+                try
+                {
+                    var url = $"https://nominatim.openstreetmap.org/search?q={Uri.EscapeDataString(q)}&format=json&limit=1&addressdetails=1";
+                    var resp = await http.GetAsync(url);
+                    if (!resp.IsSuccessStatusCode) continue;
+                    var json = await resp.Content.ReadAsStringAsync();
+                    var results = JsonSerializer.Deserialize<List<NominatimResult>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (results is { Count: > 0 })
+                    {
+                        lat = double.Parse(results[0].Lat, System.Globalization.CultureInfo.InvariantCulture);
+                        lng = double.Parse(results[0].Lon, System.Globalization.CultureInfo.InvariantCulture);
+                        countryCode = results[0].Address?.CountryCode;
+                        break;
+                    }
+                }
+                catch { }
+            }
+
+            if (!lat.HasValue || !lng.HasValue)
+                return (null, geocodingFailed: true, null);
+
+            // 3. Créer la mosquée directement — ForceCreateAsync ignore la vérification de proximité
+            // (CreateAsync a une tolérance de 110m qui retournerait une mosquée voisine incorrecte)
+            var created = await _mosqueeService.ForceCreateAsync(new Mosquee
+            {
+                Nom = FormatMosqueeName(nom),
+                Adresse = adresse,
+                Latitude = lat.Value,
+                Longitude = lng.Value,
+                Source = "import",
+            });
+            return (created, false, countryCode);
+        }
+
+        // Retourne vrai si les deux adresses partagent au moins 2 mots-clés significatifs
+        // (nom de rue, ville, numéro...). Tolère les variantes d'écriture mineures.
+        private static bool AddressesMatch(string? dbAddress, string? inputAddress)
+        {
+            if (string.IsNullOrWhiteSpace(dbAddress) || string.IsNullOrWhiteSpace(inputAddress))
+                return false;
+            var wordsA = ExtractAddressKeywords(dbAddress);
+            var wordsB = ExtractAddressKeywords(inputAddress);
+            return wordsA.Count(w => wordsB.Contains(w)) >= 2;
+        }
+
+        private static readonly HashSet<string> _addressStopWords = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "rue", "avenue", "boulevard", "allee", "place", "impasse", "chemin",
+            "route", "voie", "bis", "ter", "les", "des", "del"
+        };
+
+        private static HashSet<string> ExtractAddressKeywords(string address)
+        {
+            static char StripAccent(char c) => c switch
+            {
+                'é' or 'è' or 'ê' or 'ë' => 'e',
+                'à' or 'â' or 'ä'         => 'a',
+                'ô' or 'ö'                => 'o',
+                'î' or 'ï'                => 'i',
+                'ù' or 'û' or 'ü'         => 'u',
+                'ç'                       => 'c',
+                _                         => c,
+            };
+
+            var normalized = new string(address.ToLowerInvariant().Select(StripAccent).ToArray());
+            return normalized
+                .Split(new[] { ' ', ',', '.', '(', ')', '-', '/' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length > 3 && !_addressStopWords.Contains(w))
+                .ToHashSet();
         }
 
         // Retourne vrai si les deux noms de mosquée partagent au moins un mot significatif
