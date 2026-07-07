@@ -26,7 +26,16 @@ namespace QabrWebApp.Domain.Services.impl
         public async Task<Mosquee> CreateAsync(Mosquee mosquee)
         {
             var existing = await _repo.GetByCoordinatesAsync(mosquee.Latitude, mosquee.Longitude);
-            if (existing != null) return existing;
+            if (existing != null)
+            {
+                if (!string.IsNullOrEmpty(mosquee.OsmId) && string.IsNullOrEmpty(existing.OsmId))
+                {
+                    existing.OsmId = mosquee.OsmId;
+                    existing.Source = "osm";
+                    return await _repo.UpdateAsync(existing);
+                }
+                return existing;
+            }
             mosquee.DateCreation = DateTime.UtcNow;
             mosquee.Statut = "Validee";
             return await _repo.CreateAsync(mosquee);

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using QabrWebApp.Request;
 using QabrWebApp.Services;
 using Swashbuckle.AspNetCore.Annotations;
 
@@ -23,27 +24,25 @@ namespace QabrWebApp.Controllers
         }
 
         [HttpPost("upload")]
+        [Consumes("multipart/form-data")]
         [SwaggerOperation(Summary = "Upload d'un flyer janaza vers Google Drive")]
         [RequestSizeLimit(10 * 1024 * 1024)] // 10 MB max
-        public async Task<IActionResult> Upload(
-            [FromForm] IFormFile file,
-            [FromForm] int utilisateurId,
-            [FromForm] string? expoPushToken = null)
+        public async Task<IActionResult> Upload([FromForm] FlyerUploadRequest request)
         {
-            if (file is null || file.Length == 0)
+            if (request.File is null || request.File.Length == 0)
                 return BadRequest(new { error = "Aucun fichier fourni." });
 
-            if (!AllowedTypes.Contains(file.ContentType))
+            if (!AllowedTypes.Contains(request.File.ContentType))
                 return BadRequest(new { error = "Seuls les fichiers PNG et JPG sont acceptés." });
 
-            var session = _sessions.Create(utilisateurId, expoPushToken);
-            var ext = Path.GetExtension(file.FileName);
+            var session = _sessions.Create(request.UtilisateurId, request.ExpoPushToken);
+            var ext = Path.GetExtension(request.File.FileName);
             var driveFileName = $"{session.Token}{ext}";
 
             try
             {
-                await using var stream = file.OpenReadStream();
-                await _storage.SaveAsync(stream, driveFileName, file.ContentType);
+                await using var stream = request.File.OpenReadStream();
+                await _storage.SaveAsync(stream, driveFileName, request.File.ContentType);
             }
             catch (Exception ex)
             {
