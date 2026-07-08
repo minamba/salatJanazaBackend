@@ -14,9 +14,13 @@ namespace QabrWebApp.Controllers
     [Route("api/[controller]")]
     public class PriereJanazaController : ControllerBase
     {
-        // One semaphore per (mosqueeId, utcHourBucket) prevents two simultaneous imports
+        // One semaphore per (mosqueeId, utcMinuteBucket) prevents two simultaneous imports
         // for the same slot from both passing the conflict check before either writes.
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> _slotLocks = new();
+
+        // One semaphore per normalized mosque name prevents two concurrent imports for the
+        // same mosque from both finding it absent in DB and creating a duplicate.
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> _mosqueeCreationLocks = new();
 
         // French articles and prepositions — stay lowercase in mosque names (unless first word).
         private static readonly HashSet<string> _stopWords = new(StringComparer.OrdinalIgnoreCase)
@@ -510,6 +514,24 @@ namespace QabrWebApp.Controllers
         // Algorithme : 1) cherche par nom dans toute la base, 2) si absent → géocode + crée.
         // Pas de recherche par proximité GPS pour éviter les faux positifs (mosquées voisines).
         private async Task<(Mosquee? mosquee, bool geocodingFailed, string? countryCode)> ResolveOrCreateMosqueeForTextImportAsync(string nom, string? adresse)
+        {
+            // Sérialiser les imports concurrents pour le même nom de mosquée :
+            // sans ce verrou, deux imports simultanés pour "Mosquée Salam" trouveraient
+            // tous les deux la mosquée absente et créeraient chacun un doublon.
+            var creationLockKey = FormatMosqueeName(nom).ToLowerInvariant();
+            var creationLock = _mosqueeCreationLocks.GetOrAdd(creationLockKey, _ => new SemaphoreSlim(1, 1));
+            await creationLock.WaitAsync();
+            try
+            {
+            return await ResolveOrCreateMosqueeForTextImportCoreAsync(nom, adresse);
+            }
+            finally
+            {
+                creationLock.Release();
+            }
+        }
+
+        private async Task<(Mosquee? mosquee, bool geocodingFailed, string? countryCode)> ResolveOrCreateMosqueeForTextImportCoreAsync(string nom, string? adresse)
         {
             // 1. Recherche par nom dans toute la base de données
             var nameResults = await _mosqueeService.SearchAsync(nom);
