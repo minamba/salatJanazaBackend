@@ -17,15 +17,18 @@ namespace QabrWebApp.IdentityServer.Controllers
         private readonly UserManager<ApplicationUser> _userManager;
         private readonly SignInManager<ApplicationUser> _signInManager;
         private readonly IExternalAuthService _externalAuth;
+        private readonly IConfiguration _config;
 
         public TokenController(
             UserManager<ApplicationUser> userManager,
             SignInManager<ApplicationUser> signInManager,
-            IExternalAuthService externalAuth)
+            IExternalAuthService externalAuth,
+            IConfiguration config)
         {
             _userManager = userManager;
             _signInManager = signInManager;
             _externalAuth = externalAuth;
+            _config = config;
         }
 
         [HttpPost("~/connect/token"), IgnoreAntiforgeryToken, Produces("application/json")]
@@ -113,6 +116,10 @@ namespace QabrWebApp.IdentityServer.Controllers
                 var createResult = await _userManager.CreateAsync(user);
                 if (!createResult.Succeeded)
                     return ForbidWithError(Errors.ServerError, "Impossible de créer le compte.");
+
+                // Notification Telegram : nouvel utilisateur via connexion sociale
+                _ = QabrWebApp.IdentityServer.Helpers.TelegramHelper.SendNewUserAsync(
+                    _config, user.Prenom, user.Nom, user.Email, provider);
             }
 
             // Lier le login externe s'il n'est pas encore lié

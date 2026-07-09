@@ -21,9 +21,10 @@ namespace QabrWebApp.Controllers
         private readonly IPushNotificationService _push;
         private readonly IMosqueeDeduplicationService _dedup;
         private readonly IUtilisateurService _utilisateurService;
+        private readonly ITelegramNotificationBuilder _telegram;
         private readonly ILogger<MosqueeController> _logger;
 
-        public MosqueeController(IMosqueeService service, IMosqueeViewModelBuilder builder, IOverpassService overpass, IEmailService email, IPriereJanazaService priereService, IPushNotificationService push, IMosqueeDeduplicationService dedup, IUtilisateurService utilisateurService, ILogger<MosqueeController> logger)
+        public MosqueeController(IMosqueeService service, IMosqueeViewModelBuilder builder, IOverpassService overpass, IEmailService email, IPriereJanazaService priereService, IPushNotificationService push, IMosqueeDeduplicationService dedup, IUtilisateurService utilisateurService, ITelegramNotificationBuilder telegram, ILogger<MosqueeController> logger)
         {
             _service = service;
             _builder = builder;
@@ -33,6 +34,7 @@ namespace QabrWebApp.Controllers
             _push = push;
             _dedup = dedup;
             _utilisateurService = utilisateurService;
+            _telegram = telegram;
             _logger = logger;
         }
 
@@ -187,6 +189,11 @@ namespace QabrWebApp.Controllers
 
             _ = _email.SendNotificationAsync("support@salatjanaza.org",
                 $"[Salat Janaza] Nouvelle mosquée à valider : {created.Nom}", html.ToString());
+
+            var utilisateurEmail = utilisateurId.HasValue
+                ? (await _utilisateurService.GetByIdAsync(utilisateurId.Value))?.Email
+                : null;
+            _ = _telegram.NotifyPendingMosqueeAsync(created, utilisateurEmail);
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, _builder.Build(created));
         }

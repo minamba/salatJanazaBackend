@@ -46,32 +46,38 @@ namespace QabrWebApp.Controllers
         private readonly IPriereJanazaViewModelBuilder _builder;
         private readonly IPushNotificationService _push;
         private readonly IMosqueeService _mosqueeService;
+        private readonly IUtilisateurService _utilisateurService;
         private readonly IConfiguration _config;
         private readonly IImportSessionService _importSessions;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IEmailService _email;
         private readonly ITextImportSummaryService _textImportSummary;
+        private readonly ITelegramNotificationBuilder _telegram;
 
         public PriereJanazaController(
             IPriereJanazaService service,
             IPriereJanazaViewModelBuilder builder,
             IPushNotificationService push,
             IMosqueeService mosqueeService,
+            IUtilisateurService utilisateurService,
             IConfiguration config,
             IImportSessionService importSessions,
             IHttpClientFactory httpClientFactory,
             IEmailService email,
-            ITextImportSummaryService textImportSummary)
+            ITextImportSummaryService textImportSummary,
+            ITelegramNotificationBuilder telegram)
         {
             _service = service;
             _builder = builder;
             _push = push;
             _mosqueeService = mosqueeService;
+            _utilisateurService = utilisateurService;
             _config = config;
             _importSessions = importSessions;
             _httpClientFactory = httpClientFactory;
             _email = email;
             _textImportSummary = textImportSummary;
+            _telegram = telegram;
         }
 
         [HttpGet]
@@ -129,11 +135,22 @@ namespace QabrWebApp.Controllers
             var mosquee = await _mosqueeService.GetByIdAsync(req.MosqueeId);
             var mosqueeEnAttente = mosquee?.Statut == "EnAttente";
 
+            // Normalisation du nom avant insertion
+            var nomDefunt = (req.EstAnonyme == true) ? null : NormalizeName(req.NomDefunt);
+
+            // Vérification doublon : même défunt + même jour + même mosquée
+            if (nomDefunt is not null && req.MosqueeId > 0)
+            {
+                var existingPrieres = await _service.GetByMosqueeIdAsync(req.MosqueeId);
+                if (FindNameDayConflict(existingPrieres, nomDefunt, req.DateHeurePriere) is not null)
+                    return Conflict(new { error = "Cette janaza pour cette personne existe déjà." });
+            }
+
             var priere = new PriereJanaza
             {
                 MosqueeId = req.MosqueeId,
                 UtilisateurId = req.UtilisateurId,
-                NomDefunt = req.NomDefunt,
+                NomDefunt = nomDefunt,
                 EstAnonyme = req.EstAnonyme,
                 Genre = req.Genre,
                 DateHeurePriere = req.DateHeurePriere,
@@ -148,10 +165,16 @@ namespace QabrWebApp.Controllers
 
             var created = await _service.CreateAsync(priere);
 
+            // Récupération de l'utilisateur pour la notification Telegram (une seule requête DB)
+            Utilisateur? utilisateur = null;
+            if (req.UtilisateurId is int uid && uid > 0)
+                utilisateur = await _utilisateurService.GetByIdAsync(uid);
+
             if (!mosqueeEnAttente)
             {
                 await _push.NotifyMosqueeSubscribersAsync(req.MosqueeId, created);
                 await _push.ScheduleMosqueeReminderAsync(req.MosqueeId, created);
+                _ = _telegram.NotifyNewJanazaAsync(created, mosquee?.Nom ?? "—", mosquee?.Adresse, utilisateur);
             }
             else
             {
@@ -179,6 +202,7 @@ namespace QabrWebApp.Controllers
                 _ = _email.SendNotificationAsync(supportEmail,
                     $"[Salat Janaza] Déclaration en attente – lieu à valider : {mosquee?.Nom ?? $"ID {req.MosqueeId}"}",
                     html.ToString());
+                _ = _telegram.NotifyPendingJanazaAsync(created, mosquee?.Nom ?? "—");
             }
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, _builder.Build(created));
@@ -289,11 +313,32 @@ namespace QabrWebApp.Controllers
                     });
                 }
 
+                // Normalisation du nom et vérification doublon nom+jour
+                var nomDefunt = req.EstAnonyme ? null : NormalizeName(req.NomDefunt);
+                if (nomDefunt is not null)
+                {
+                    var nameConflict = FindNameDayConflict(existing, nomDefunt, utcDate);
+                    if (nameConflict is not null)
+                    {
+                        slotLock.Release();
+                        lockReleased = true;
+                        _textImportSummary.AddSkip(req.TextImportToken, mosquee.Nom, nomDefunt, req.DateHeurePriere, "DUPLICATE_PERSON");
+                        return Ok(new
+                        {
+                            skipped = true,
+                            reason = "DUPLICATE_PERSON",
+                            mosqueeNom = mosquee.Nom,
+                            nomDefunt,
+                            dateHeurePriere = req.DateHeurePriere,
+                        });
+                    }
+                }
+
                 var priere = new PriereJanaza
                 {
                     MosqueeId = mosquee.Id,
                     UtilisateurId = req.UtilisateurId,
-                    NomDefunt = req.NomDefunt,
+                    NomDefunt = nomDefunt,
                     EstAnonyme = req.EstAnonyme,
                     Genre = req.Genre?.ToLowerInvariant(),
                     DateHeurePriere = utcDate,
@@ -388,11 +433,24 @@ namespace QabrWebApp.Controllers
                     return Conflict(new { error = msg });
                 }
 
+                // Normalisation du nom et vérification doublon nom+jour
+                var nomDefunt = req.EstAnonyme ? null : NormalizeName(req.NomDefunt);
+                if (nomDefunt is not null)
+                {
+                    var nameConflict = FindNameDayConflict(existing, nomDefunt, utcDate);
+                    if (nameConflict is not null)
+                    {
+                        var msg = "Cette janaza pour cette personne existe déjà.";
+                        _importSessions.SetError(req.ImportToken, msg);
+                        return Conflict(new { error = msg });
+                    }
+                }
+
                 var priere = new PriereJanaza
                 {
                     MosqueeId = mosquee.Id,
                     UtilisateurId = session.UtilisateurId,
-                    NomDefunt = req.NomDefunt,
+                    NomDefunt = nomDefunt,
                     EstAnonyme = req.EstAnonyme,
                     Genre = req.Genre?.ToLowerInvariant(),
                     DateHeurePriere = utcDate,
@@ -423,6 +481,12 @@ namespace QabrWebApp.Controllers
                     "Janaza importée ✓",
                     $"La janaza de {(req.EstAnonyme ? "défunt(e) anonyme" : req.NomDefunt)} a été ajoutée avec succès.");
             }
+
+            // Notification Telegram : nouvelle janaza via import flyer
+            Utilisateur? utilisateurFlyer = null;
+            if (session.UtilisateurId > 0)
+                utilisateurFlyer = await _utilisateurService.GetByIdAsync(session.UtilisateurId);
+            _ = _telegram.NotifyNewJanazaAsync(created, mosquee.Nom, mosquee.Adresse, utilisateurFlyer);
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, _builder.Build(created));
         }
@@ -592,7 +656,19 @@ namespace QabrWebApp.Controllers
             if (!lat.HasValue || !lng.HasValue)
                 return (null, geocodingFailed: true, null);
 
-            // 3. Créer la mosquée directement — ForceCreateAsync ignore la vérification de proximité
+            // 3a. Dédup avant création : recherche une mosquée existante dans un rayon de 200m.
+            // Critère 1 : même adresse exacte (CP + n° de rue + mots-clés).
+            // Critère 2 (fallback) : coordonnées GPS strictement identiques — fiable quand
+            //   l'adresse est de type "code postal + ville" sans numéro de rue, car Nominatim
+            //   retourne toujours les mêmes coordonnées pour la même chaîne d'adresse.
+            var nearbyForDedup = await _mosqueeService.GetNearbyAsync(lat.Value, lng.Value, 0.2);
+            var dedupMatch = nearbyForDedup.FirstOrDefault(m => SameExactAddress(m.Adresse, adresse))
+                          ?? nearbyForDedup.FirstOrDefault(m =>
+                                m.Latitude == lat.Value && m.Longitude == lng.Value);
+            if (dedupMatch is not null)
+                return (dedupMatch, false, countryCode);
+
+            // 3b. Créer la mosquée directement — ForceCreateAsync ignore la vérification de proximité
             // (CreateAsync a une tolérance de 110m qui retournerait une mosquée voisine incorrecte)
             var created = await _mosqueeService.ForceCreateAsync(new Mosquee
             {
@@ -603,6 +679,71 @@ namespace QabrWebApp.Controllers
                 Source = "import",
             });
             return (created, false, countryCode);
+        }
+
+        // ── Normalisation du nom du défunt ────────────────────────────────────────
+        // Première lettre de chaque mot en majuscule, reste en minuscule (Title Case).
+        // Appliqué avant toute insertion pour garantir une casse cohérente en base.
+        private static string? NormalizeName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            return System.Globalization.CultureInfo.InvariantCulture.TextInfo
+                .ToTitleCase(name.Trim().ToLowerInvariant());
+        }
+
+        // ── Vérification de doublon de prière ────────────────────────────────────
+        // Retourne la prière existante si même nom (insensible à la casse) + même jour + même mosquée.
+        // Utilisé dans les trois chemins d'insertion (Create, ImportText, Import).
+        private static PriereJanaza? FindNameDayConflict(
+            IEnumerable<PriereJanaza> existing,
+            string? nomDefunt,
+            DateTime prayerDay)
+        {
+            if (string.IsNullOrWhiteSpace(nomDefunt)) return null;
+            return existing.FirstOrDefault(p =>
+                !p.EstAnonyme &&
+                p.DateHeurePriere.Date == prayerDay.Date &&
+                string.Equals(p.NomDefunt?.Trim(), nomDefunt.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        // ── Correspondance exacte d'adresse (pour dédup mosquée TXT import) ─────
+        // Retourne vrai si les deux adresses représentent le même lieu physique :
+        // code postal identique + numéro de rue identique + ≥2 mots significatifs communs.
+        private static bool SameExactAddress(string? a, string? b)
+        {
+            if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+
+            var pcA = ExtractPostalCode(a);
+            var pcB = ExtractPostalCode(b);
+            if (pcA != null && pcB != null && pcA != pcB) return false;
+
+            var snA = ExtractStreetNumber(a);
+            var snB = ExtractStreetNumber(b);
+            if (snA != null && snB != null && snA != snB) return false;
+
+            // Au moins un ancrage (CP ou numéro) doit correspondre pour éviter les faux positifs
+            bool hasAnchor = (pcA != null && pcB != null) || (snA != null && snB != null);
+            if (!hasAnchor) return false;
+
+            var wordsA = ExtractAddressKeywords(a);
+            var wordsB = ExtractAddressKeywords(b);
+            return wordsA.Count(w => wordsB.Contains(w)) >= 2;
+        }
+
+        private static string? ExtractPostalCode(string s)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(s, @"\b(\d{4,6})\b");
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
+        private static string? ExtractStreetNumber(string s)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(s.TrimStart(), @"^(\d+)\b");
+            if (!m.Success) return null;
+            var candidate = m.Groups[1].Value;
+            // Ignorer si c'est le même token que le code postal (ex : "26100 Romans-sur-Isère")
+            var pc = ExtractPostalCode(s);
+            return candidate == pc ? null : candidate;
         }
 
         // Retourne vrai si les deux adresses partagent au moins 2 mots-clés significatifs

@@ -89,6 +89,9 @@ builder.Services.AddScoped<IPriereJanazaViewModelBuilder, PriereJanazaViewModelB
 builder.Services.AddScoped<IUtilisateurViewModelBuilder, UtilisateurViewModelBuilder>();
 builder.Services.AddScoped<IAbonnementViewModelBuilder, AbonnementViewModelBuilder>();
 
+// Telegram notification builder (singleton : sans état, dépend uniquement de singletons)
+builder.Services.AddSingleton<ITelegramNotificationBuilder, TelegramNotificationBuilder>();
+
 // Background services
 builder.Services.AddHostedService<PriereJanazaCleanupService>();
 builder.Services.AddHostedService<RappelPushBackgroundService>();

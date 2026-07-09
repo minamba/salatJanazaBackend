@@ -51,6 +51,12 @@ namespace QabrWebApp.IdentityServer.Controllers
                 catch (Exception ex) { _logger.LogError(ex, "Erreur envoi email bienvenue à {Email}", req.Email); }
             });
 
+            _ = Task.Run(async () =>
+            {
+                try { await SendTelegramNewUserAsync(req.Prenom, req.Nom, req.Email, lang); }
+                catch (Exception ex) { _logger.LogError(ex, "Erreur Telegram nouvel utilisateur {Email}", req.Email); }
+            });
+
             return Ok(new { userId = user.Id, email = user.Email, message = "Compte créé avec succès." });
         }
 
@@ -503,6 +509,9 @@ namespace QabrWebApp.IdentityServer.Controllers
   {EmailFooter("ar")}
 </div>
 </body></html>";
+
+        private Task SendTelegramNewUserAsync(string prenom, string nom, string email, string lang)
+            => QabrWebApp.IdentityServer.Helpers.TelegramHelper.SendNewUserAsync(_config, prenom, nom, email, lang);
     }
 
     public class RegisterRequest

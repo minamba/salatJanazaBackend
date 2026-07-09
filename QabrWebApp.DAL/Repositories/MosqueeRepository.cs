@@ -276,7 +276,7 @@ namespace QabrWebApp.Dal.Repositories
         public async Task DeleteAsync(int id)
         {
             var entity = await _ctx.Mosquees.FindAsync(id);
-            if (entity is not null) { entity.Statut = "Supprimee"; await _ctx.SaveChangesAsync(); }
+            if (entity is not null) { _ctx.Mosquees.Remove(entity); await _ctx.SaveChangesAsync(); }
         }
 
         private static bool IsValidForStorage(DomainModel.Mosquee m)
