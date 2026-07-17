@@ -6,14 +6,16 @@ namespace QabrWebApp.Builders.impl
     public class TelegramNotificationBuilder : ITelegramNotificationBuilder
     {
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly ILogger<TelegramNotificationBuilder> _logger;
         private readonly string? _janazaToken;
         private readonly string? _janazaChatId;
         private readonly string? _pendingToken;
         private readonly string? _pendingChatId;
 
-        public TelegramNotificationBuilder(IHttpClientFactory httpClientFactory, IConfiguration config)
+        public TelegramNotificationBuilder(IHttpClientFactory httpClientFactory, IConfiguration config, ILogger<TelegramNotificationBuilder> logger)
         {
             _httpClientFactory = httpClientFactory;
+            _logger = logger;
             _janazaToken   = config["TelegramNewJanaza:BotToken"];
             _janazaChatId  = config["TelegramNewJanaza:ChatId"];
             _pendingToken  = config["TelegramPending:BotToken"];
@@ -67,7 +69,7 @@ namespace QabrWebApp.Builders.impl
             sb.AppendLine($"— Nom : {EscapeMd(mosquee.Nom)}");
             if (!string.IsNullOrWhiteSpace(mosquee.Adresse))
                 sb.AppendLine($"— Adresse : {EscapeMd(mosquee.Adresse)}");
-            sb.AppendLine($"— Coordonnées : {mosquee.Latitude}, {mosquee.Longitude}");
+            sb.AppendLine($"— Coordonnées : {EscapeMd(mosquee.Latitude.ToString())} , {EscapeMd(mosquee.Longitude.ToString())}");
             if (!string.IsNullOrWhiteSpace(utilisateurEmail))
                 sb.AppendLine($"— Soumis par : {EscapeMd(utilisateurEmail)}");
 
@@ -89,7 +91,8 @@ namespace QabrWebApp.Builders.impl
         {
             if (string.IsNullOrEmpty(s)) return "—";
             return s.Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[")
-                    .Replace("]", "\\]").Replace("~", "\\~").Replace("`", "\\`")
+                    .Replace("]", "\\]").Replace("(", "\\(").Replace(")", "\\)")
+                    .Replace("~", "\\~").Replace("`", "\\`")
                     .Replace(">", "\\>").Replace("#", "\\#").Replace("+", "\\+")
                     .Replace("-", "\\-").Replace("=", "\\=").Replace("|", "\\|")
                     .Replace("{", "\\{").Replace("}", "\\}").Replace(".", "\\.")
@@ -109,9 +112,17 @@ namespace QabrWebApp.Builders.impl
                     { "text",    text   },
                     { "parse_mode", "MarkdownV2" }
                 };
-                await client.PostAsync(url, new FormUrlEncodedContent(payload));
+                var response = await client.PostAsync(url, new FormUrlEncodedContent(payload));
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    _logger.LogError("Telegram SendAsync failed — status {Status}, body: {Body}", (int)response.StatusCode, body);
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Telegram SendAsync exception — chatId: {ChatId}", chatId);
+            }
         }
     }
 }

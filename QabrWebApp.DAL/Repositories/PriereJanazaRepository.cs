@@ -54,7 +54,7 @@ namespace QabrWebApp.Dal.Repositories
         public async Task<List<DomainModel.PriereJanaza>> GetUpcomingAsync()
         {
             var now = DateTime.UtcNow;
-            var cutoff = now.AddHours(-2);
+            var cutoff = now.AddMinutes(-90);
             var entities = await _ctx.PrieresJanaza
                 .Include(p => p.Mosquee)
                 .AsNoTracking()
@@ -133,7 +133,7 @@ namespace QabrWebApp.Dal.Repositories
             {
                 var trueUtc = e.DateHeurePriere.AddMinutes(-e.UtcOffsetMinutes);
                 model.Statut = trueUtc > now ? DomainStatut.AVenir
-                             : trueUtc > now.AddHours(-2) ? DomainStatut.EnCours
+                             : trueUtc > now.AddMinutes(-90) ? DomainStatut.EnCours
                              : DomainStatut.Terminee;
             }
             return model;
