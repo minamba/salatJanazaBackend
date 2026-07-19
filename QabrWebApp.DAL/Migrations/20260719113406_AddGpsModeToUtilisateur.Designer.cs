@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using QabrWebApp.Dal.Entities;
 
@@ -11,9 +12,11 @@ using QabrWebApp.Dal.Entities;
 namespace QabrWebApp.Dal.Migrations
 {
     [DbContext(typeof(QabrWebAppDatabaseContext))]
-    partial class QabrWebAppDatabaseContextModelSnapshot : ModelSnapshot
+    [Migration("20260719113406_AddGpsModeToUtilisateur")]
+    partial class AddGpsModeToUtilisateur
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

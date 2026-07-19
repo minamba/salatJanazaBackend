@@ -18,5 +18,8 @@ namespace QabrWebApp.Domain.Models
         public string Role { get; set; } = "User";
         public string Language { get; set; } = "fr";
         public bool CanImportFlyer { get; set; } = false;
+        public double? LatitudeCourante { get; set; }
+        public double? LongitudeCourante { get; set; }
+        public string? ModeLocalisation { get; set; }
     }
 }

@@ -4,5 +4,6 @@ namespace QabrWebApp.Domain.Repositories
     {
         Task UpsertAsync(int utilisateurId, string expoToken);
         Task<List<string>> GetTokensByUserIdsAsync(IEnumerable<int> utilisateurIds);
+        Task<List<(string Token, string Language)>> GetTokensWithLanguageByUserIdsAsync(IEnumerable<int> utilisateurIds);
     }
 }

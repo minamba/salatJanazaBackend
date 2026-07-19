@@ -44,6 +44,12 @@ namespace QabrWebApp.Dal.Entities
 
         public bool CanImportFlyer { get; set; } = false;
 
+        public double? LatitudeCourante { get; set; }
+        public double? LongitudeCourante { get; set; }
+
+        [MaxLength(10)]
+        public string? ModeLocalisation { get; set; }
+
         public ICollection<Abonnement> Abonnements { get; set; } = [];
         public ICollection<PriereJanaza> PrieresDeclarees { get; set; } = [];
     }

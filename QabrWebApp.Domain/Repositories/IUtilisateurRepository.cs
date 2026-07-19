@@ -12,5 +12,6 @@ namespace QabrWebApp.Domain.Repositories
         Task DeleteAsync(int id);
         Task<int> BulkSetCanImportFlyerAsync(bool canImportFlyer);
         Task<List<string>> GetExpoTokensPageAsync(string role, int offset, int limit);
+        Task<List<(int UserId, string? LegacyToken, string Language)>> GetUsersInRadiusAsync(double lat, double lon, ISet<int> excludeUserIds);
     }
 }

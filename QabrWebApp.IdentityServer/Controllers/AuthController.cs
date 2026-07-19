@@ -1,4 +1,4 @@
-using MailKit.Net.Smtp;
+﻿using MailKit.Net.Smtp;
 using MailKit.Security;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -286,7 +286,10 @@ namespace QabrWebApp.IdentityServer.Controllers
         }
 
         private static string NormalizeLanguage(string? lang) => lang?.ToLower() switch {
-            "fr" => "fr", "en" => "en", "ar" => "ar", _ => "en"
+            "fr" => "fr", "en" => "en", "ar" => "ar",
+            "tr" => "tr", "ja" => "ja", "ko" => "ko",
+            "ms" => "ms", "ur" => "ur", "id" => "id", "bn" => "bn", "ru" => "ru", "pt" => "pt", "de" => "de", "it" => "it", "es" => "es",
+            _ => "en"
         };
 
         private async Task SendEmailAsync(MimeMessage message)

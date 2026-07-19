@@ -55,6 +55,9 @@ namespace QabrWebApp.Dal.Repositories
             entity.Role = utilisateur.Role;
             entity.Language = utilisateur.Language;
             entity.CanImportFlyer = utilisateur.CanImportFlyer;
+            entity.LatitudeCourante = utilisateur.LatitudeCourante;
+            entity.LongitudeCourante = utilisateur.LongitudeCourante;
+            entity.ModeLocalisation = utilisateur.ModeLocalisation;
             await _ctx.SaveChangesAsync();
             return ToModel(entity);
         }
@@ -70,6 +73,66 @@ namespace QabrWebApp.Dal.Repositories
             return await _ctx.Utilisateurs
                 .Where(u => u.Role == "User")
                 .ExecuteUpdateAsync(s => s.SetProperty(u => u.CanImportFlyer, canImportFlyer));
+        }
+
+        public async Task<List<(int UserId, string? LegacyToken, string Language)>> GetUsersInRadiusAsync(
+            double mosquéeLat, double mosquéeLon, ISet<int> excludeUserIds)
+        {
+            // Charge uniquement les utilisateurs qui ont une position (domicile ou courante)
+            var users = await _ctx.Utilisateurs
+                .AsNoTracking()
+                .Where(u =>
+                    (u.LatitudeDomicile != null && u.LongitudeDomicile != null) ||
+                    (u.LatitudeCourante != null && u.LongitudeCourante != null))
+                .Select(u => new
+                {
+                    u.Id,
+                    u.ExpoToken,
+                    u.Language,
+                    u.ModeLocalisation,
+                    u.LatitudeDomicile, u.LongitudeDomicile,
+                    u.LatitudeCourante, u.LongitudeCourante,
+                    u.RayonNotification,
+                })
+                .ToListAsync();
+
+            var result = new List<(int, string?, string)>();
+            foreach (var u in users)
+            {
+                if (excludeUserIds.Contains(u.Id)) continue;
+
+                // Choix du centre : mode domicile si explicitement choisi et coordonnées disponibles,
+                // sinon position GPS courante
+                double? centerLat, centerLon;
+                if (u.ModeLocalisation == "home" && u.LatitudeDomicile.HasValue)
+                {
+                    centerLat = u.LatitudeDomicile;
+                    centerLon = u.LongitudeDomicile;
+                }
+                else
+                {
+                    centerLat = u.LatitudeCourante;
+                    centerLon = u.LongitudeCourante;
+                }
+
+                if (centerLat is null || centerLon is null) continue;
+
+                var distKm = HaversineKm(centerLat.Value, centerLon.Value, mosquéeLat, mosquéeLon);
+                if (distKm <= u.RayonNotification)
+                    result.Add((u.Id, u.ExpoToken, u.Language ?? "fr"));
+            }
+            return result;
+        }
+
+        private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
+        {
+            const double R = 6371;
+            var dLat = (lat2 - lat1) * Math.PI / 180;
+            var dLon = (lon2 - lon1) * Math.PI / 180;
+            var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+                  + Math.Cos(lat1 * Math.PI / 180) * Math.Cos(lat2 * Math.PI / 180)
+                  * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+            return R * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
         }
 
         public Task<List<string>> GetExpoTokensPageAsync(string role, int offset, int limit)
@@ -94,6 +157,8 @@ namespace QabrWebApp.Dal.Repositories
             RayonNotification = e.RayonNotification, NotifMouvement = e.NotifMouvement,
             DateInscription = e.DateInscription, Role = e.Role, Language = e.Language,
             CanImportFlyer = e.CanImportFlyer,
+            LatitudeCourante = e.LatitudeCourante, LongitudeCourante = e.LongitudeCourante,
+            ModeLocalisation = e.ModeLocalisation,
         };
 
         private static Utilisateur ToEntity(DomainModel.Utilisateur u) => new()
@@ -105,6 +170,8 @@ namespace QabrWebApp.Dal.Repositories
             LatitudeDomicile = u.LatitudeDomicile, LongitudeDomicile = u.LongitudeDomicile,
             RayonNotification = u.RayonNotification, NotifMouvement = u.NotifMouvement,
             DateInscription = u.DateInscription, Role = u.Role, Language = u.Language,
+            LatitudeCourante = u.LatitudeCourante, LongitudeCourante = u.LongitudeCourante,
+            ModeLocalisation = u.ModeLocalisation,
         };
     }
 }

@@ -48,14 +48,14 @@ namespace QabrWebApp.Services
                     {
                         var abonnes = await abonnementRepo.GetByMosqueeIdAsync(rappel.MosqueeId);
                         var userIds = abonnes.Select(a => a.UtilisateurId).Distinct().ToList();
-                        var newTokens = await tokenRepo.GetTokensByUserIdsAsync(userIds);
+                        var newTokens = await tokenRepo.GetTokensWithLanguageByUserIdsAsync(userIds);
+                        var newTokenSet = newTokens.Select(x => x.Token).ToHashSet();
                         var legacyTokens = abonnes
-                            .Where(a => a.Utilisateur?.ExpoToken is not null)
-                            .Select(a => a.Utilisateur!.ExpoToken!)
-                            .Where(t => !newTokens.Contains(t));
-                        var tokens = newTokens.Concat(legacyTokens).Distinct().ToList();
+                            .Where(a => a.Utilisateur?.ExpoToken is not null && !newTokenSet.Contains(a.Utilisateur.ExpoToken))
+                            .Select(a => (Token: a.Utilisateur!.ExpoToken!, Language: a.Utilisateur.Language ?? "fr"));
+                        var allTokens = newTokens.Concat(legacyTokens).DistinctBy(x => x.Token).ToList();
 
-                        if (tokens.Count > 0)
+                        if (allTokens.Count > 0)
                         {
                             var db = scope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
                             var priere = await db.PrieresJanaza
@@ -66,19 +66,15 @@ namespace QabrWebApp.Services
                             if (priere is not null)
                             {
                                 var mosqueeNom = priere.Mosquee?.Nom ?? "une mosquée";
-                                var defunt = (priere.EstAnonyme || string.IsNullOrEmpty(priere.NomDefunt))
-                                    ? "Défunt anonyme"
-                                    : priere.NomDefunt!;
-                                var genre = priere.Genre?.ToLower() switch {
-                                    "homme" => "Homme", "femme" => "Femme", "enfant" => "Enfant", _ => null
-                                };
                                 // Wall-clock UTC = heure locale telle qu'affichée. Ne pas ajouter l'offset.
-                                var dateLocale = priere.DateHeurePriere;
-
-                                var title = "⏰ Rappel — Salat Janaza dans 30 min";
-                                var body = $"{defunt}{(genre is not null ? $" ({genre})" : "")} · {mosqueeNom} · {dateLocale:HH:mm}";
-
-                                await push.SendToTokensAsync(tokens, title, body, new { priereId = priere.Id, mosqueeId = rappel.MosqueeId });
+                                var data = new { priereId = priere.Id, mosqueeId = rappel.MosqueeId };
+                                foreach (var group in allTokens.GroupBy(x => x.Language))
+                                {
+                                    var (title, body) = NotifL10n.BuildReminderNotif(
+                                        group.Key, priere.EstAnonyme, priere.NomDefunt, priere.Genre,
+                                        mosqueeNom, priere.DateHeurePriere);
+                                    await push.SendToTokensAsync(group.Select(x => x.Token), title, body, data);
+                                }
                             }
                         }
 

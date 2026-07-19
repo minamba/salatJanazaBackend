@@ -174,6 +174,7 @@ namespace QabrWebApp.Controllers
             {
                 await _push.NotifyMosqueeSubscribersAsync(req.MosqueeId, created);
                 await _push.ScheduleMosqueeReminderAsync(req.MosqueeId, created);
+                _ = _push.NotifyRadiusUsersAsync(req.MosqueeId, created);
                 _ = _telegram.NotifyNewJanazaAsync(created, mosquee?.Nom ?? "—", mosquee?.Adresse, utilisateur);
             }
             else
@@ -361,6 +362,7 @@ namespace QabrWebApp.Controllers
 
             await _push.NotifyMosqueeSubscribersAsync(mosquee.Id, created);
             await _push.ScheduleMosqueeReminderAsync(mosquee.Id, created);
+            _ = _push.NotifyRadiusUsersAsync(mosquee.Id, created);
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, new
             {
@@ -473,6 +475,7 @@ namespace QabrWebApp.Controllers
 
             await _push.NotifyMosqueeSubscribersAsync(mosquee.Id, created);
             await _push.ScheduleMosqueeReminderAsync(mosquee.Id, created);
+            _ = _push.NotifyRadiusUsersAsync(mosquee.Id, created);
 
             if (!string.IsNullOrEmpty(session.ExpoPushToken))
             {

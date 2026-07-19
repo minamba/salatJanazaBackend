@@ -50,6 +50,12 @@ namespace QabrWebApp.Request
 
         [MaxLength(10)]
         public string? Language { get; set; }
+
+        public double? LatitudeCourante { get; set; }
+        public double? LongitudeCourante { get; set; }
+
+        [MaxLength(10)]
+        public string? ModeLocalisation { get; set; }
     }
 
     public class AdminUpdateRoleRequest

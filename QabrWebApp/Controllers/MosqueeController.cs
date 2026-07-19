@@ -215,6 +215,7 @@ namespace QabrWebApp.Controllers
                 {
                     _ = _push.NotifyMosqueeSubscribersAsync(id, priere);
                     _ = _push.ScheduleMosqueeReminderAsync(id, priere);
+                    _ = _push.NotifyRadiusUsersAsync(id, priere);
                 }
             }
 

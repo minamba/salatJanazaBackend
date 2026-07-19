@@ -94,7 +94,9 @@ namespace QabrWebApp.Dal.Repositories
 
                     if (entity.DerniereSyncOsm == null || entity.DerniereSyncOsm < cutoff)
                     {
-                        entity.Nom = m.Nom;
+                        // Ne pas écraser un nom déjà normalisé par l'admin — seulement les noms génériques
+                        if (IsGenericName(entity.Nom))
+                            entity.Nom = m.Nom;
                         if (!string.IsNullOrEmpty(m.Adresse)) entity.Adresse = m.Adresse;
                         entity.Latitude = m.Latitude;
                         entity.Longitude = m.Longitude;

@@ -36,5 +36,17 @@ namespace QabrWebApp.Dal.Repositories
                 .Distinct()
                 .ToListAsync();
         }
+
+        public async Task<List<(string Token, string Language)>> GetTokensWithLanguageByUserIdsAsync(IEnumerable<int> utilisateurIds)
+        {
+            var rows = await _ctx.UtilisateurTokens
+                .Include(t => t.Utilisateur)
+                .Where(t => utilisateurIds.Contains(t.UtilisateurId))
+                .ToListAsync();
+            return rows
+                .DistinctBy(r => r.ExpoToken)
+                .Select(r => (r.ExpoToken, r.Utilisateur?.Language ?? "fr"))
+                .ToList();
+        }
     }
 }

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using MimeKit;
 using QabrWebApp.Builders;
 using QabrWebApp.Domain.Models;
@@ -106,6 +106,9 @@ namespace QabrWebApp.Controllers
             if (req.LongitudeDomicile.HasValue) existing.LongitudeDomicile = req.LongitudeDomicile;
             if (req.RayonNotification.HasValue) existing.RayonNotification = req.RayonNotification.Value;
             if (req.NotifMouvement.HasValue) existing.NotifMouvement = req.NotifMouvement.Value;
+            if (req.LatitudeCourante.HasValue) existing.LatitudeCourante = req.LatitudeCourante;
+            if (req.LongitudeCourante.HasValue) existing.LongitudeCourante = req.LongitudeCourante;
+            if (req.ModeLocalisation is not null) existing.ModeLocalisation = req.ModeLocalisation;
             if (req.Language is not null)
             {
                 existing.Language = NormalizeLanguage(req.Language);
@@ -332,7 +335,10 @@ namespace QabrWebApp.Controllers
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "acc1.png");
 
         private static string NormalizeLanguage(string? lang) => lang?.ToLower() switch {
-            "fr" => "fr", "en" => "en", "ar" => "ar", _ => "en"
+            "fr" => "fr", "en" => "en", "ar" => "ar",
+            "tr" => "tr", "ja" => "ja", "ko" => "ko",
+            "ms" => "ms", "ur" => "ur", "id" => "id", "bn" => "bn", "ru" => "ru", "pt" => "pt", "de" => "de", "it" => "it", "es" => "es",
+            _ => "en"
         };
 
         private static string EmailHeader(string subtitle) => $@"

@@ -11,16 +11,20 @@ namespace QabrWebApp.Services
         private readonly IAbonnementRepository _abonnementRepo;
         private readonly IRappelPushRepository _rappelRepo;
         private readonly IUtilisateurTokenRepository _tokenRepo;
+        private readonly IUtilisateurRepository _utilisateurRepo;
+        private readonly IMosqueeRepository _mosqueeRepo;
         private readonly ILogger<PushNotificationService> _logger;
 
         private static readonly JsonSerializerOptions _json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-        public PushNotificationService(HttpClient http, IAbonnementRepository abonnementRepo, IRappelPushRepository rappelRepo, IUtilisateurTokenRepository tokenRepo, ILogger<PushNotificationService> logger)
+        public PushNotificationService(HttpClient http, IAbonnementRepository abonnementRepo, IRappelPushRepository rappelRepo, IUtilisateurTokenRepository tokenRepo, IUtilisateurRepository utilisateurRepo, IMosqueeRepository mosqueeRepo, ILogger<PushNotificationService> logger)
         {
             _http = http;
             _abonnementRepo = abonnementRepo;
             _rappelRepo = rappelRepo;
             _tokenRepo = tokenRepo;
+            _utilisateurRepo = utilisateurRepo;
+            _mosqueeRepo = mosqueeRepo;
             _logger = logger;
         }
 
@@ -29,42 +33,32 @@ namespace QabrWebApp.Services
             var abonnes = await _abonnementRepo.GetByMosqueeIdAsync(mosqueeId);
             var userIds = abonnes.Select(a => a.UtilisateurId).Distinct().ToList();
 
-            var newTokens = await _tokenRepo.GetTokensByUserIdsAsync(userIds);
+            var newTokens = await _tokenRepo.GetTokensWithLanguageByUserIdsAsync(userIds);
+            var newTokenSet = newTokens.Select(x => x.Token).ToHashSet();
             var legacyTokens = abonnes
-                .Where(a => a.Utilisateur?.ExpoToken is not null)
-                .Select(a => a.Utilisateur!.ExpoToken!)
-                .Where(t => !newTokens.Contains(t));
-            var tokens = newTokens.Concat(legacyTokens).Distinct().ToList();
+                .Where(a => a.Utilisateur?.ExpoToken is not null && !newTokenSet.Contains(a.Utilisateur.ExpoToken))
+                .Select(a => (Token: a.Utilisateur!.ExpoToken!, Language: a.Utilisateur.Language ?? "fr"));
+            var allTokens = newTokens.Concat(legacyTokens).DistinctBy(x => x.Token).ToList();
 
-            if (tokens.Count == 0) return;
+            if (allTokens.Count == 0) return;
 
-            var mosqueeNom = priere.Mosquee?.Nom ?? "une mosquée";
-            var defunt = (priere.EstAnonyme || string.IsNullOrEmpty(priere.NomDefunt))
-                ? "Défunt anonyme"
-                : priere.NomDefunt!;
-            var genre = priere.Genre?.ToLower() switch {
-                "homme" => "Homme", "femme" => "Femme", "enfant" => "Enfant", _ => null
-            };
             // DateHeurePriere est stocké en wall-clock UTC (= heure locale telle qu'affichée).
-            // Ne pas ajouter utcOffset : la valeur EST déjà l'heure locale.
-            var dateLocale = priere.DateHeurePriere;
-
-            var title = "🕌 Salat Janaza";
-            var body = $"{defunt}{(genre is not null ? $" ({genre})" : "")} · {mosqueeNom} · {dateLocale:dd/MM à HH:mm}";
-
-            var messages = tokens.Select(token => new
+            var mosqueeNom = priere.Mosquee?.Nom ?? "une mosquée";
+            var messages = allTokens.Select(tl =>
             {
-                to = token,
-                title,
-                body,
-                data = new { priereId = priere.Id, mosqueeId },
-                sound = "default",
-                // Android 8+ : le canal doit correspondre à celui créé sur l'appareil.
-                // Sans channelId, FCM peut rejeter silencieusement la notification.
-                channelId = "default",
-                // priority "high" = FCM high priority → réveille l'appareil immédiatement.
-                // Sans ça, Android peut retarder ou grouper les notifications.
-                priority = "high",
+                var (title, body) = NotifL10n.BuildJanazaNotif(
+                    tl.Language, priere.EstAnonyme, priere.NomDefunt, priere.Genre,
+                    mosqueeNom, priere.DateHeurePriere);
+                return new
+                {
+                    to = tl.Token,
+                    title,
+                    body,
+                    data = new { priereId = priere.Id, mosqueeId },
+                    sound = "default",
+                    channelId = "default",
+                    priority = "high",
+                };
             }).ToList();
 
             await SendBatchAsync(messages);
@@ -118,6 +112,50 @@ namespace QabrWebApp.Services
                 priority = "high",
             };
             await SendBatchAsync([message]);
+        }
+
+        public async Task NotifyRadiusUsersAsync(int mosqueeId, PriereJanaza priere)
+        {
+            var mosquee = await _mosqueeRepo.GetByIdAsync(mosqueeId);
+            if (mosquee is null) return;
+
+            // Exclure les abonnés : ils reçoivent déjà la notif + rappel via NotifyMosqueeSubscribersAsync
+            var abonnes = await _abonnementRepo.GetByMosqueeIdAsync(mosqueeId);
+            var subscriberIds = abonnes.Select(a => a.UtilisateurId).ToHashSet();
+
+            var radiusUsers = await _utilisateurRepo.GetUsersInRadiusAsync(
+                mosquee.Latitude, mosquee.Longitude, subscriberIds);
+
+            if (radiusUsers.Count == 0) return;
+
+            var userIds = radiusUsers.Select(u => u.UserId).ToList();
+            var newTokens = await _tokenRepo.GetTokensWithLanguageByUserIdsAsync(userIds);
+            var newTokenSet = newTokens.Select(x => x.Token).ToHashSet();
+            var legacyTokens = radiusUsers
+                .Where(u => u.LegacyToken is not null && !newTokenSet.Contains(u.LegacyToken))
+                .Select(u => (Token: u.LegacyToken!, Language: u.Language));
+            var allTokens = newTokens.Concat(legacyTokens).DistinctBy(x => x.Token).ToList();
+            if (allTokens.Count == 0) return;
+
+            var mosqueeNom = priere.Mosquee?.Nom ?? mosquee.Nom ?? "une mosquée";
+            var messages = allTokens.Select(tl =>
+            {
+                var (title, body) = NotifL10n.BuildJanazaNotif(
+                    tl.Language, priere.EstAnonyme, priere.NomDefunt, priere.Genre,
+                    mosqueeNom, priere.DateHeurePriere);
+                return new
+                {
+                    to = tl.Token,
+                    title,
+                    body,
+                    data = new { priereId = priere.Id, mosqueeId },
+                    sound = "default",
+                    channelId = "default",
+                    priority = "high",
+                };
+            });
+
+            await SendBatchAsync(messages);
         }
 
         public Task SendPermissionUpdateToManyAsync(IEnumerable<string> expoTokens, bool canImportFlyer)
