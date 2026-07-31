@@ -109,6 +109,7 @@ namespace QabrWebApp.Controllers
             if (req.LatitudeCourante.HasValue) existing.LatitudeCourante = req.LatitudeCourante;
             if (req.LongitudeCourante.HasValue) existing.LongitudeCourante = req.LongitudeCourante;
             if (req.ModeLocalisation is not null) existing.ModeLocalisation = req.ModeLocalisation;
+            if (req.Platform is not null) existing.Platform = req.Platform;
             if (req.Language is not null)
             {
                 existing.Language = NormalizeLanguage(req.Language);

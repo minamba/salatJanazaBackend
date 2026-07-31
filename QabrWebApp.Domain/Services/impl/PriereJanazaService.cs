@@ -26,7 +26,7 @@ namespace QabrWebApp.Domain.Services.impl
         public Task<PriereJanaza> CreateAsync(PriereJanaza priere)
         {
             priere.DateCreation = DateTime.UtcNow;
-            if (priere.Statut != StatutPriere.EnAttente)
+            if (priere.Statut != StatutPriere.EnAttente && priere.Statut != StatutPriere.Brouillon)
                 // Comparer le vrai UTC de la prière (wall-clock - offset) avec l'heure actuelle.
                 priere.Statut = priere.DateHeurePriere.AddMinutes(-priere.UtcOffsetMinutes) > DateTime.UtcNow ? StatutPriere.AVenir : StatutPriere.EnCours;
             return _repo.CreateAsync(priere);

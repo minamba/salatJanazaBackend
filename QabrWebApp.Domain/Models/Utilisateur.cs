@@ -21,5 +21,6 @@ namespace QabrWebApp.Domain.Models
         public double? LatitudeCourante { get; set; }
         public double? LongitudeCourante { get; set; }
         public string? ModeLocalisation { get; set; }
+        public string? Platform { get; set; }
     }
 }

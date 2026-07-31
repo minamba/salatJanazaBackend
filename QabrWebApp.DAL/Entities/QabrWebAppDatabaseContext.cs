@@ -7,12 +7,13 @@ namespace QabrWebApp.Dal.Entities
         public QabrWebAppDatabaseContext(DbContextOptions<QabrWebAppDatabaseContext> options)
             : base(options) { }
 
-        public DbSet<Mosquee> Mosquees { get; set; }
-        public DbSet<PriereJanaza> PrieresJanaza { get; set; }
-        public DbSet<Utilisateur> Utilisateurs { get; set; }
-        public DbSet<Abonnement> Abonnements { get; set; }
-        public DbSet<RappelPush> RappelsPush { get; set; }
-        public DbSet<UtilisateurToken> UtilisateurTokens { get; set; }
+        public DbSet<Mosquee>                   Mosquees                  { get; set; }
+        public DbSet<PriereJanaza>              PrieresJanaza             { get; set; }
+        public DbSet<PriereJanazaHistorique>    PrieresJanazaHistorique   { get; set; }
+        public DbSet<Utilisateur>               Utilisateurs              { get; set; }
+        public DbSet<Abonnement>                Abonnements               { get; set; }
+        public DbSet<RappelPush>                RappelsPush               { get; set; }
+        public DbSet<UtilisateurToken>          UtilisateurTokens         { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

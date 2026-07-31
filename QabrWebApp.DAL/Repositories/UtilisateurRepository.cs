@@ -58,6 +58,7 @@ namespace QabrWebApp.Dal.Repositories
             entity.LatitudeCourante = utilisateur.LatitudeCourante;
             entity.LongitudeCourante = utilisateur.LongitudeCourante;
             entity.ModeLocalisation = utilisateur.ModeLocalisation;
+            entity.Platform = utilisateur.Platform;
             await _ctx.SaveChangesAsync();
             return ToModel(entity);
         }
@@ -101,8 +102,9 @@ namespace QabrWebApp.Dal.Repositories
             {
                 if (excludeUserIds.Contains(u.Id)) continue;
 
-                // Choix du centre : mode domicile si explicitement choisi et coordonnées disponibles,
-                // sinon position GPS courante
+                // Choix du centre :
+                // - mode "home" explicite → adresse domicile
+                // - sinon → GPS courant ; si GPS null (permission refusée ou pas encore syncé), fallback sur domicile
                 double? centerLat, centerLon;
                 if (u.ModeLocalisation == "home" && u.LatitudeDomicile.HasValue)
                 {
@@ -111,8 +113,8 @@ namespace QabrWebApp.Dal.Repositories
                 }
                 else
                 {
-                    centerLat = u.LatitudeCourante;
-                    centerLon = u.LongitudeCourante;
+                    centerLat = u.LatitudeCourante ?? u.LatitudeDomicile;
+                    centerLon = u.LongitudeCourante ?? u.LongitudeDomicile;
                 }
 
                 if (centerLat is null || centerLon is null) continue;
@@ -159,6 +161,7 @@ namespace QabrWebApp.Dal.Repositories
             CanImportFlyer = e.CanImportFlyer,
             LatitudeCourante = e.LatitudeCourante, LongitudeCourante = e.LongitudeCourante,
             ModeLocalisation = e.ModeLocalisation,
+            Platform = e.Platform,
         };
 
         private static Utilisateur ToEntity(DomainModel.Utilisateur u) => new()

@@ -1,3 +1,4 @@
+using GeoTimeZone;
 using Microsoft.AspNetCore.Mvc;
 using QabrWebApp.Builders;
 using QabrWebApp.Domain.Models;
@@ -53,6 +54,8 @@ namespace QabrWebApp.Controllers
         private readonly IEmailService _email;
         private readonly ITextImportSummaryService _textImportSummary;
         private readonly ITelegramNotificationBuilder _telegram;
+        private readonly IServiceScopeFactory _scopeFactory;
+        private readonly ILogger<PriereJanazaController> _logger;
 
         public PriereJanazaController(
             IPriereJanazaService service,
@@ -65,7 +68,9 @@ namespace QabrWebApp.Controllers
             IHttpClientFactory httpClientFactory,
             IEmailService email,
             ITextImportSummaryService textImportSummary,
-            ITelegramNotificationBuilder telegram)
+            ITelegramNotificationBuilder telegram,
+            IServiceScopeFactory scopeFactory,
+            ILogger<PriereJanazaController> logger)
         {
             _service = service;
             _builder = builder;
@@ -78,6 +83,28 @@ namespace QabrWebApp.Controllers
             _email = email;
             _textImportSummary = textImportSummary;
             _telegram = telegram;
+            _scopeFactory = scopeFactory;
+            _logger = logger;
+        }
+
+        // Exécute une notification en arrière-plan dans son propre scope DI (DbContext isolé).
+        // Evite le crash "A second operation was started on this context instance" causé par
+        // l'utilisation concurrente du DbContext scopé de la requête HTTP.
+        private void RunInBackground(Func<IPushNotificationService, Task> action)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var push = scope.ServiceProvider.GetRequiredService<IPushNotificationService>();
+                    await action(push);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[RunInBackground] Exception lors de l'envoi de notification rayon");
+                }
+            });
         }
 
         [HttpGet]
@@ -159,7 +186,7 @@ namespace QabrWebApp.Controllers
                 VilleEnterrement = req.VilleEnterrement,
                 AnneeNaissance = req.AnneeNaissance,
                 AnneeDeces = req.AnneeDeces,
-                UtcOffsetMinutes = req.UtcOffsetMinutes,
+                UtcOffsetMinutes = GetUtcOffsetMinutesForCoords(mosquee?.Latitude, mosquee?.Longitude, req.DateHeurePriere),
                 Statut = mosqueeEnAttente ? StatutPriere.EnAttente : StatutPriere.AVenir,
             };
 
@@ -174,7 +201,7 @@ namespace QabrWebApp.Controllers
             {
                 await _push.NotifyMosqueeSubscribersAsync(req.MosqueeId, created);
                 await _push.ScheduleMosqueeReminderAsync(req.MosqueeId, created);
-                _ = _push.NotifyRadiusUsersAsync(req.MosqueeId, created);
+                RunInBackground(push => push.NotifyRadiusUsersAsync(req.MosqueeId, created));
                 _ = _telegram.NotifyNewJanazaAsync(created, mosquee?.Nom ?? "—", mosquee?.Adresse, utilisateur);
             }
             else
@@ -225,7 +252,8 @@ namespace QabrWebApp.Controllers
             existing.VilleEnterrement = req.VilleEnterrement;
             existing.AnneeNaissance = req.AnneeNaissance;
             existing.AnneeDeces = req.AnneeDeces;
-            existing.UtcOffsetMinutes = req.UtcOffsetMinutes;
+            var mosqueeForTz = await _mosqueeService.GetByIdAsync(req.MosqueeId);
+            existing.UtcOffsetMinutes = GetUtcOffsetMinutesForCoords(mosqueeForTz?.Latitude, mosqueeForTz?.Longitude, req.DateHeurePriere);
             var updated = await _service.UpdateAsync(existing);
             // Annule l'ancien rappel et en planifie un nouveau avec la nouvelle heure
             await _push.RescheduleMosqueeReminderAsync(req.MosqueeId, updated);
@@ -247,6 +275,48 @@ namespace QabrWebApp.Controllers
             {
                 return StatusCode(500, new { error = ex.Message, inner = ex.InnerException?.Message, type = ex.GetType().Name });
             }
+        }
+
+        [HttpPost("{id}/publish")]
+        [SwaggerOperation(Summary = "Publie un brouillon de janaza importé depuis un flyer (valide et envoie les notifications)")]
+        public async Task<IActionResult> Publish(int id, [FromBody] PriereJanazaRequest req)
+        {
+            var existing = await _service.GetByIdAsync(id);
+            if (existing is null) return NotFound();
+            if (existing.Statut != StatutPriere.Brouillon)
+                return BadRequest(new { error = "Cette prière n'est pas en brouillon." });
+
+            var mosquee = await _mosqueeService.GetByIdAsync(req.MosqueeId);
+            var mosqueeEnAttente = mosquee?.Statut == "EnAttente";
+
+            existing.MosqueeId = req.MosqueeId;
+            existing.NomDefunt = req.EstAnonyme ? null : NormalizeName(req.NomDefunt);
+            existing.EstAnonyme = req.EstAnonyme;
+            existing.Genre = req.Genre;
+            existing.DateHeurePriere = req.DateHeurePriere;
+            existing.Commentaire = req.Commentaire;
+            existing.PaysEnterrement = req.PaysEnterrement;
+            existing.VilleEnterrement = req.VilleEnterrement;
+            existing.AnneeNaissance = req.AnneeNaissance;
+            existing.AnneeDeces = req.AnneeDeces;
+            existing.UtcOffsetMinutes = GetUtcOffsetMinutesForCoords(mosquee?.Latitude, mosquee?.Longitude, req.DateHeurePriere);
+            existing.Statut = mosqueeEnAttente ? StatutPriere.EnAttente : StatutPriere.AVenir;
+
+            var updated = await _service.UpdateAsync(existing);
+
+            if (!mosqueeEnAttente)
+            {
+                await _push.NotifyMosqueeSubscribersAsync(existing.MosqueeId, updated);
+                await _push.ScheduleMosqueeReminderAsync(existing.MosqueeId, updated);
+                RunInBackground(push => push.NotifyRadiusUsersAsync(existing.MosqueeId, updated));
+
+                Utilisateur? utilisateur = existing.UtilisateurId.HasValue
+                    ? await _utilisateurService.GetByIdAsync(existing.UtilisateurId.Value)
+                    : null;
+                _ = _telegram.NotifyNewJanazaAsync(updated, mosquee?.Nom ?? "—", mosquee?.Adresse, utilisateur);
+            }
+
+            return Ok(_builder.Build(updated));
         }
 
         [HttpPost("import/text")]
@@ -362,7 +432,7 @@ namespace QabrWebApp.Controllers
 
             await _push.NotifyMosqueeSubscribersAsync(mosquee.Id, created);
             await _push.ScheduleMosqueeReminderAsync(mosquee.Id, created);
-            _ = _push.NotifyRadiusUsersAsync(mosquee.Id, created);
+            RunInBackground(push => push.NotifyRadiusUsersAsync(mosquee.Id, created));
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, new
             {
@@ -414,28 +484,8 @@ namespace QabrWebApp.Controllers
             PriereJanaza created;
             try
             {
-                // Vérification créneau occupé : une seule janaza par mosquée par heure (en UTC)
+                // Normalisation du nom et vérification doublon nom+jour (même personne uniquement)
                 var existing = await _service.GetByMosqueeIdAsync(mosquee.Id);
-                var conflict = existing.FirstOrDefault(p =>
-                {
-                    var pd = DateTime.SpecifyKind(p.DateHeurePriere, DateTimeKind.Utc);
-                    return pd.Year == utcDate.Year && pd.Month == utcDate.Month
-                        && pd.Day == utcDate.Day && pd.Hour == utcDate.Hour;
-                });
-
-                if (conflict is not null)
-                {
-                    var conflictLabel = conflict.EstAnonyme
-                        ? "anonyme"
-                        : (conflict.NomDefunt ?? "inconnu(e)");
-                    var conflictTime = DateTime.SpecifyKind(conflict.DateHeurePriere, DateTimeKind.Utc)
-                        .ToString("dd/MM/yyyy à HH:mm", System.Globalization.CultureInfo.InvariantCulture);
-                    var msg = $"Une janaza est déjà programmée dans cette mosquée le {conflictTime} UTC ({conflictLabel}). Une seule janaza par créneau horaire est autorisée.";
-                    _importSessions.SetError(req.ImportToken, msg);
-                    return Conflict(new { error = msg });
-                }
-
-                // Normalisation du nom et vérification doublon nom+jour
                 var nomDefunt = req.EstAnonyme ? null : NormalizeName(req.NomDefunt);
                 if (nomDefunt is not null)
                 {
@@ -462,6 +512,7 @@ namespace QabrWebApp.Controllers
                     AnneeNaissance = req.AnneeNaissance,
                     AnneeDeces = req.AnneeDeces,
                     UtcOffsetMinutes = utcOffsetMinutes,
+                    Statut = StatutPriere.Brouillon,
                 };
 
                 created = await _service.CreateAsync(priere);
@@ -473,23 +524,7 @@ namespace QabrWebApp.Controllers
             var timeUnknown = req.DateHeurePriere.Hour == 0 && req.DateHeurePriere.Minute == 0;
             _importSessions.SetSuccess(req.ImportToken, created.Id, timeUnknown);
 
-            await _push.NotifyMosqueeSubscribersAsync(mosquee.Id, created);
-            await _push.ScheduleMosqueeReminderAsync(mosquee.Id, created);
-            _ = _push.NotifyRadiusUsersAsync(mosquee.Id, created);
-
-            if (!string.IsNullOrEmpty(session.ExpoPushToken))
-            {
-                await _push.SendToTokenAsync(
-                    session.ExpoPushToken,
-                    "Janaza importée ✓",
-                    $"La janaza de {(req.EstAnonyme ? "défunt(e) anonyme" : req.NomDefunt)} a été ajoutée avec succès.");
-            }
-
-            // Notification Telegram : nouvelle janaza via import flyer
-            Utilisateur? utilisateurFlyer = null;
-            if (session.UtilisateurId > 0)
-                utilisateurFlyer = await _utilisateurService.GetByIdAsync(session.UtilisateurId);
-            _ = _telegram.NotifyNewJanazaAsync(created, mosquee.Nom, mosquee.Adresse, utilisateurFlyer);
+            // Pas de notifications : la janaza est en brouillon, l'utilisateur doit valider avant publication.
 
             return CreatedAtAction(nameof(GetById), new { id = created.Id }, _builder.Build(created));
         }
@@ -534,14 +569,71 @@ namespace QabrWebApp.Controllers
                 catch { }
             }
 
+            // Fallback 2 : API Adresse (gouvernement français)
+            if (!lat.HasValue && !string.IsNullOrWhiteSpace(adresse))
+            {
+                try
+                {
+                    var url2 = $"https://api-adresse.data.gouv.fr/search/?q={Uri.EscapeDataString(adresse)}&limit=1";
+                    var resp2 = await http.GetAsync(url2);
+                    if (resp2.IsSuccessStatusCode)
+                    {
+                        var json2 = await resp2.Content.ReadAsStringAsync();
+                        var geoJson2 = JsonSerializer.Deserialize<JsonElement>(json2);
+                        var features2 = geoJson2.GetProperty("features");
+                        if (features2.GetArrayLength() > 0)
+                        {
+                            var coords2 = features2[0].GetProperty("geometry").GetProperty("coordinates");
+                            lng = coords2[0].GetDouble();
+                            lat = coords2[1].GetDouble();
+                            countryCode = "fr";
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // Fallback 3 : Photon (Komoot) — fallback mondial
+            if (!lat.HasValue)
+            {
+                var photonQ = !string.IsNullOrWhiteSpace(adresse) ? adresse : nom;
+                try
+                {
+                    var url3 = $"https://photon.komoot.io/api/?q={Uri.EscapeDataString(photonQ)}&limit=1";
+                    var resp3 = await http.GetAsync(url3);
+                    if (resp3.IsSuccessStatusCode)
+                    {
+                        var json3 = await resp3.Content.ReadAsStringAsync();
+                        var geoJson3 = JsonSerializer.Deserialize<JsonElement>(json3);
+                        var features3 = geoJson3.GetProperty("features");
+                        if (features3.GetArrayLength() > 0)
+                        {
+                            var coords3 = features3[0].GetProperty("geometry").GetProperty("coordinates");
+                            var props3 = features3[0].GetProperty("properties");
+                            lng = coords3[0].GetDouble();
+                            lat = coords3[1].GetDouble();
+                            if (props3.TryGetProperty("country_code", out var cc3))
+                                countryCode = cc3.GetString();
+                        }
+                    }
+                }
+                catch { }
+            }
+
             // Géocodage impossible : adresse illisible sur l'image
             if (!lat.HasValue || !lng.HasValue)
                 return (null, geocodingFailed: true, null);
 
-            // 2. Chercher une mosquée existante dans un rayon de 500m EN PRIORITISANT LE NOM.
-            // Sans validation du nom, une mosquée homonyme ou proche mais différente
-            // (ex : "Mosquée Arrahma" alors qu'on importe pour "Mosquée de Meaux") serait retournée.
-            var nearby = await _mosqueeService.GetNearbyAsync(lat.Value, lng.Value, 0.50);
+            _logger.LogInformation("[Resolve] nom={Nom} → geocodage lat={Lat} lng={Lng}", nom, lat, lng);
+
+            // 2. Chercher une mosquée existante dans un rayon de 1km EN PRIORITISANT LE NOM.
+            // 1km (au lieu de 500m) pour absorber la variance des coordonnées Nominatim :
+            // le même adresse peut être géocodée à des points distants de ~570m selon les appels.
+            var nearby = await _mosqueeService.GetNearbyAsync(lat.Value, lng.Value, 1.0);
+            _logger.LogInformation("[Resolve] {Count} mosquée(s) trouvée(s) dans 1km : {Noms}",
+                nearby.Count,
+                string.Join(", ", nearby.Select(m => $"{m.Nom} ({Haversine(lat.Value, lng.Value, m.Latitude, m.Longitude) * 1000:F0}m)")));
+
             if (nearby.Count > 0)
             {
                 // Priorité 1 : mosquée proche dont le nom partage au moins un mot significatif
@@ -549,13 +641,18 @@ namespace QabrWebApp.Controllers
                     .Where(m => MosqueeNamesCompatible(nom, m.Nom))
                     .OrderBy(m => Haversine(lat.Value, lng.Value, m.Latitude, m.Longitude))
                     .FirstOrDefault();
+
+                _logger.LogInformation("[Resolve] nameMatch={Match} pour nom={Nom}",
+                    nameMatch?.Nom ?? "AUCUN",
+                    nom);
+
                 if (nameMatch != null)
                     return (nameMatch, false, countryCode);
 
-                // Priorité 2 : mosquée très proche (< 80 m) sans contrainte de nom
+                // Priorité 2 : mosquée très proche (< 1 m) sans contrainte de nom
                 // (même bâtiment, noms orthographiés différemment par des acteurs différents)
                 var veryClose = nearby
-                    .Where(m => Haversine(lat.Value, lng.Value, m.Latitude, m.Longitude) < 0.08)
+                    .Where(m => Haversine(lat.Value, lng.Value, m.Latitude, m.Longitude) < 0.001)
                     .OrderBy(m => Haversine(lat.Value, lng.Value, m.Latitude, m.Longitude))
                     .FirstOrDefault();
                 if (veryClose != null)
@@ -656,6 +753,57 @@ namespace QabrWebApp.Controllers
                 catch { }
             }
 
+            // Fallback 2 : API Adresse (gouvernement français)
+            if (!lat.HasValue && !string.IsNullOrWhiteSpace(adresse))
+            {
+                try
+                {
+                    var url2 = $"https://api-adresse.data.gouv.fr/search/?q={Uri.EscapeDataString(adresse)}&limit=1";
+                    var resp2 = await http.GetAsync(url2);
+                    if (resp2.IsSuccessStatusCode)
+                    {
+                        var json2 = await resp2.Content.ReadAsStringAsync();
+                        var geoJson2 = JsonSerializer.Deserialize<JsonElement>(json2);
+                        var features2 = geoJson2.GetProperty("features");
+                        if (features2.GetArrayLength() > 0)
+                        {
+                            var coords2 = features2[0].GetProperty("geometry").GetProperty("coordinates");
+                            lng = coords2[0].GetDouble();
+                            lat = coords2[1].GetDouble();
+                            countryCode = "fr";
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // Fallback 3 : Photon (Komoot) — fallback mondial
+            if (!lat.HasValue)
+            {
+                var photonQ = !string.IsNullOrWhiteSpace(adresse) ? adresse : nom;
+                try
+                {
+                    var url3 = $"https://photon.komoot.io/api/?q={Uri.EscapeDataString(photonQ)}&limit=1";
+                    var resp3 = await http.GetAsync(url3);
+                    if (resp3.IsSuccessStatusCode)
+                    {
+                        var json3 = await resp3.Content.ReadAsStringAsync();
+                        var geoJson3 = JsonSerializer.Deserialize<JsonElement>(json3);
+                        var features3 = geoJson3.GetProperty("features");
+                        if (features3.GetArrayLength() > 0)
+                        {
+                            var coords3 = features3[0].GetProperty("geometry").GetProperty("coordinates");
+                            var props3 = features3[0].GetProperty("properties");
+                            lng = coords3[0].GetDouble();
+                            lat = coords3[1].GetDouble();
+                            if (props3.TryGetProperty("country_code", out var cc3))
+                                countryCode = cc3.GetString();
+                        }
+                    }
+                }
+                catch { }
+            }
+
             if (!lat.HasValue || !lng.HasValue)
                 return (null, geocodingFailed: true, null);
 
@@ -700,12 +848,14 @@ namespace QabrWebApp.Controllers
         private static PriereJanaza? FindNameDayConflict(
             IEnumerable<PriereJanaza> existing,
             string? nomDefunt,
-            DateTime prayerDay)
+            DateTime prayerDateTime)
         {
             if (string.IsNullOrWhiteSpace(nomDefunt)) return null;
             return existing.FirstOrDefault(p =>
                 !p.EstAnonyme &&
-                p.DateHeurePriere.Date == prayerDay.Date &&
+                p.DateHeurePriere.Date == prayerDateTime.Date &&
+                p.DateHeurePriere.Hour == prayerDateTime.Hour &&
+                p.DateHeurePriere.Minute == prayerDateTime.Minute &&
                 string.Equals(p.NomDefunt?.Trim(), nomDefunt.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
@@ -803,6 +953,41 @@ namespace QabrWebApp.Controllers
             if (sigA.Count == 0 || sigB.Count == 0) return true;
 
             return sigA.Any(w => sigB.Contains(w));
+        }
+
+        private static int GetUtcOffsetMinutesForCoords(double? latitude, double? longitude, DateTime refDate)
+        {
+            if (latitude is null || longitude is null) return 0;
+            var ianaId = TimeZoneLookup.GetTimeZone(latitude.Value, longitude.Value).Result;
+            var tz = GetTimezoneByIana(ianaId);
+            return (int)tz.GetUtcOffset(refDate).TotalMinutes;
+        }
+
+        private static TimeZoneInfo GetTimezoneByIana(string ianaId)
+        {
+            if (TimeZoneInfo.TryFindSystemTimeZoneById(ianaId, out var tz)) return tz;
+            var winId = ianaId switch
+            {
+                "Europe/Paris"    => "Romance Standard Time",
+                "Africa/Cairo"    => "Egypt Standard Time",
+                "Africa/Casablanca" => "Morocco Standard Time",
+                "Asia/Riyadh"     => "Arab Standard Time",
+                "Asia/Dubai"      => "Arabian Standard Time",
+                "Asia/Karachi"    => "Pakistan Standard Time",
+                "Asia/Dhaka"      => "Bangladesh Standard Time",
+                "Asia/Kolkata"    => "India Standard Time",
+                "Asia/Jakarta"    => "SE Asia Standard Time",
+                "Asia/Kuala_Lumpur" => "Singapore Standard Time",
+                "Asia/Istanbul"   => "Turkey Standard Time",
+                "Europe/London"   => "GMT Standard Time",
+                "Europe/Lisbon"   => "GMT Standard Time",
+                "America/New_York" => "Eastern Standard Time",
+                "America/Chicago" => "Central Standard Time",
+                "America/Denver"  => "Mountain Standard Time",
+                "America/Los_Angeles" => "Pacific Standard Time",
+                _                 => "UTC"
+            };
+            return TimeZoneInfo.TryFindSystemTimeZoneById(winId, out tz) ? tz : TimeZoneInfo.Utc;
         }
 
         private static TimeZoneInfo GetTimezoneForCountry(string? countryCode)

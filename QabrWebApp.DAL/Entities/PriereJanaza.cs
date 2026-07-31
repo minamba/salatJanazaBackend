@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace QabrWebApp.Dal.Entities
 {
-    public enum StatutPriereEntity { AVenir, EnCours, Terminee, EnAttente }
+    public enum StatutPriereEntity { AVenir, EnCours, Terminee, EnAttente, Brouillon }
 
     [Table("PrieresJanaza")]
     public class PriereJanaza

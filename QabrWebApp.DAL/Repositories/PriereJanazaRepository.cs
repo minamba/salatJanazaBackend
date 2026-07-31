@@ -34,7 +34,7 @@ namespace QabrWebApp.Dal.Repositories
             var entities = await _ctx.PrieresJanaza
                 .Include(p => p.Mosquee)
                 .AsNoTracking()
-                .Where(p => p.MosqueeId == mosqueeId)
+                .Where(p => p.MosqueeId == mosqueeId && p.Statut != EntityStatut.Brouillon)
                 .OrderByDescending(p => p.DateHeurePriere)
                 .ToListAsync();
             return entities.Select(ToModel).ToList();
@@ -60,7 +60,7 @@ namespace QabrWebApp.Dal.Repositories
                 .AsNoTracking()
                 // Retourne les prières dont le vrai UTC est dans les 2h passées ou dans le futur.
                 // Le statut est recalculé dynamiquement au moment du mapping.
-                .Where(p => p.DateHeurePriere.AddMinutes(-p.UtcOffsetMinutes) >= cutoff && p.Statut != EntityStatut.EnAttente)
+                .Where(p => p.DateHeurePriere.AddMinutes(-p.UtcOffsetMinutes) >= cutoff && p.Statut != EntityStatut.EnAttente && p.Statut != EntityStatut.Brouillon)
                 .OrderBy(p => p.DateHeurePriere)
                 .ToListAsync();
             return entities.Select(e => ToModelWithComputedStatut(e, now)).ToList();
@@ -94,11 +94,28 @@ namespace QabrWebApp.Dal.Repositories
             var entity = ToEntity(priere);
             _ctx.PrieresJanaza.Add(entity);
             await _ctx.SaveChangesAsync();
-            var withMosquee = await _ctx.PrieresJanaza
+
+            var withNav = await _ctx.PrieresJanaza
                 .Include(p => p.Mosquee)
+                .Include(p => p.Utilisateur)
                 .AsNoTracking()
                 .FirstAsync(p => p.Id == entity.Id);
-            return ToModel(withMosquee);
+
+            // Copie dénormalisée dans la table historique — survivra à toute purge future
+            _ctx.PrieresJanazaHistorique.Add(new PriereJanazaHistorique
+            {
+                DateCreation    = entity.DateCreation,
+                Genre           = entity.Genre,
+                NomDefunt       = entity.NomDefunt,
+                EstAnonyme      = entity.EstAnonyme,
+                DeclarantPrenom = withNav.Utilisateur?.Prenom,
+                DeclarantNom    = withNav.Utilisateur?.Nom,
+                MosqueeNom      = withNav.Mosquee?.Nom,
+                Pays            = entity.PaysEnterrement,
+            });
+            await _ctx.SaveChangesAsync();
+
+            return ToModel(withNav);
         }
 
         public async Task<DomainModel.PriereJanaza> UpdateAsync(DomainModel.PriereJanaza priere)
@@ -118,7 +135,12 @@ namespace QabrWebApp.Dal.Repositories
             entity.UtcOffsetMinutes = priere.UtcOffsetMinutes;
             entity.Statut = ToEntityStatut(priere.Statut);
             await _ctx.SaveChangesAsync();
-            return priere;
+
+            var withNav = await _ctx.PrieresJanaza
+                .Include(p => p.Mosquee)
+                .AsNoTracking()
+                .FirstAsync(p => p.Id == entity.Id);
+            return ToModel(withNav);
         }
 
         public async Task DeleteAsync(int id)
@@ -129,7 +151,7 @@ namespace QabrWebApp.Dal.Repositories
         private static DomainModel.PriereJanaza ToModelWithComputedStatut(PriereJanaza e, DateTime now)
         {
             var model = ToModel(e);
-            if (e.Statut != EntityStatut.EnAttente)
+            if (e.Statut != EntityStatut.EnAttente && e.Statut != EntityStatut.Brouillon)
             {
                 var trueUtc = e.DateHeurePriere.AddMinutes(-e.UtcOffsetMinutes);
                 model.Statut = trueUtc > now ? DomainStatut.AVenir
@@ -171,6 +193,7 @@ namespace QabrWebApp.Dal.Repositories
             EntityStatut.EnCours => DomainStatut.EnCours,
             EntityStatut.Terminee => DomainStatut.Terminee,
             EntityStatut.EnAttente => DomainStatut.EnAttente,
+            EntityStatut.Brouillon => DomainStatut.Brouillon,
             _ => DomainStatut.AVenir,
         };
 
@@ -179,6 +202,7 @@ namespace QabrWebApp.Dal.Repositories
             DomainStatut.EnCours => EntityStatut.EnCours,
             DomainStatut.Terminee => EntityStatut.Terminee,
             DomainStatut.EnAttente => EntityStatut.EnAttente,
+            DomainStatut.Brouillon => EntityStatut.Brouillon,
             _ => EntityStatut.AVenir,
         };
     }

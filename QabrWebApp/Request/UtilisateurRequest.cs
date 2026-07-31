@@ -56,6 +56,9 @@ namespace QabrWebApp.Request
 
         [MaxLength(10)]
         public string? ModeLocalisation { get; set; }
+
+        [MaxLength(10)]
+        public string? Platform { get; set; }
     }
 
     public class AdminUpdateRoleRequest

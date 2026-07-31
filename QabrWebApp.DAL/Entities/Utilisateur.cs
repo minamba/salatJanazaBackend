@@ -50,6 +50,9 @@ namespace QabrWebApp.Dal.Entities
         [MaxLength(10)]
         public string? ModeLocalisation { get; set; }
 
+        [MaxLength(10)]
+        public string? Platform { get; set; }
+
         public ICollection<Abonnement> Abonnements { get; set; } = [];
         public ICollection<PriereJanaza> PrieresDeclarees { get; set; } = [];
     }

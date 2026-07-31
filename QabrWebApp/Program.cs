@@ -144,6 +144,86 @@ using (var scope = app.Services.CreateScope())
             Thread.Sleep(5000);
         }
     }
+
+    // Colonnes ajoutées manuellement — idempotent, safe à rejouer à chaque démarrage
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID(N'Utilisateurs') AND name = N'Platform'
+            )
+            ALTER TABLE [Utilisateurs] ADD [Platform] nvarchar(10) NULL;
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Warning colonnes optionnelles : {ex.Message}");
+    }
+
+    // Table historique des janazas — immunisée à la purge, jamais supprimée
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.objects
+                WHERE object_id = OBJECT_ID(N'PrieresJanazaHistorique') AND type = N'U'
+            )
+            BEGIN
+                CREATE TABLE [PrieresJanazaHistorique] (
+                    [Id]              INT IDENTITY(1,1)  NOT NULL,
+                    [DateCreation]    DATETIME2(7)       NOT NULL,
+                    [Genre]           NVARCHAR(10)       NULL,
+                    [NomDefunt]       NVARCHAR(200)      NULL,
+                    [EstAnonyme]      BIT                NOT NULL DEFAULT 0,
+                    [DeclarantPrenom] NVARCHAR(100)      NULL,
+                    [DeclarantNom]    NVARCHAR(100)      NULL,
+                    [MosqueeNom]      NVARCHAR(300)      NULL,
+                    [Pays]            NVARCHAR(100)      NULL,
+                    CONSTRAINT [PK_PrieresJanazaHistorique] PRIMARY KEY ([Id])
+                );
+                CREATE INDEX [IX_PrieresJanazaHistorique_DateCreation]
+                    ON [PrieresJanazaHistorique] ([DateCreation]);
+            END
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Warning PrieresJanazaHistorique : {ex.Message}");
+    }
+
+    // Backfill historique — exécuté une seule fois si la table est vide
+    // Rétroalimente toutes les janazas existantes avant le déploiement de cette feature
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT TOP 1 1 FROM [PrieresJanazaHistorique])
+            BEGIN
+                INSERT INTO [PrieresJanazaHistorique]
+                    ([DateCreation], [Genre], [NomDefunt], [EstAnonyme],
+                     [DeclarantPrenom], [DeclarantNom], [MosqueeNom], [Pays])
+                SELECT
+                    p.[DateCreation],
+                    p.[Genre],
+                    p.[NomDefunt],
+                    p.[EstAnonyme],
+                    u.[Prenom],
+                    u.[Nom],
+                    m.[Nom],
+                    p.[PaysEnterrement]
+                FROM [PrieresJanaza] p
+                LEFT JOIN [Utilisateurs] u ON u.[Id] = p.[UtilisateurId]
+                LEFT JOIN [Mosquees]     m ON m.[Id] = p.[MosqueeId];
+
+                PRINT CONCAT('[Startup] Backfill historique : ',
+                    CAST(@@ROWCOUNT AS NVARCHAR), ' janazas importées.');
+            END
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Warning backfill historique : {ex.Message}");
+    }
 }
 
 app.UseExceptionHandler(errorApp =>

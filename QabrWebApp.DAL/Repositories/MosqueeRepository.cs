@@ -236,7 +236,7 @@ namespace QabrWebApp.Dal.Repositories
 
         public async Task<DomainModel.Mosquee?> GetByCoordinatesAsync(double latitude, double longitude)
         {
-            const double tolerance = 0.001; // ~110m, couvre les écarts entre sources (Nominatim vs Overpass)
+            const double tolerance = 0.0001; // ~11m, couvre les écarts entre sources (Nominatim vs Overpass) sans matcher des bâtiments différents
             var e = await _ctx.Mosquees.AsNoTracking()
                 .Where(m => m.Statut == "Validee"
                          && m.Latitude >= latitude - tolerance && m.Latitude <= latitude + tolerance

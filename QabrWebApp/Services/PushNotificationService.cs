@@ -76,8 +76,13 @@ namespace QabrWebApp.Services
             // Le vrai UTC de la prière = wall-clock - utcOffset.
             // Le rappel doit partir 30 min avant le vrai UTC.
             var trueUtcPrayer = priere.DateHeurePriere.AddMinutes(-priere.UtcOffsetMinutes);
+            if (trueUtcPrayer <= DateTime.UtcNow) return; // prière déjà passée
+
             var dateEnvoi = trueUtcPrayer.AddMinutes(-30);
-            if (dateEnvoi <= DateTime.UtcNow) return;
+            // Si la fenêtre des 30 min est déjà passée mais la prière est encore à venir,
+            // envoyer le rappel dans 30 secondes (cas d'une modification de dernière minute)
+            if (dateEnvoi <= DateTime.UtcNow)
+                dateEnvoi = DateTime.UtcNow.AddSeconds(30);
 
             await _rappelRepo.CreateAsync(new RappelPush
             {
@@ -117,7 +122,11 @@ namespace QabrWebApp.Services
         public async Task NotifyRadiusUsersAsync(int mosqueeId, PriereJanaza priere)
         {
             var mosquee = await _mosqueeRepo.GetByIdAsync(mosqueeId);
-            if (mosquee is null) return;
+            if (mosquee is null)
+            {
+                _logger.LogWarning("[Radius] MosqueeId={MosqueeId} introuvable — notification annulée", mosqueeId);
+                return;
+            }
 
             // Exclure les abonnés : ils reçoivent déjà la notif + rappel via NotifyMosqueeSubscribersAsync
             var abonnes = await _abonnementRepo.GetByMosqueeIdAsync(mosqueeId);
@@ -125,6 +134,9 @@ namespace QabrWebApp.Services
 
             var radiusUsers = await _utilisateurRepo.GetUsersInRadiusAsync(
                 mosquee.Latitude, mosquee.Longitude, subscriberIds);
+
+            _logger.LogInformation("[Radius] MosqueeId={MosqueeId} → {Count} utilisateur(s) dans le rayon (abonnés exclus: {ExcludedCount})",
+                mosqueeId, radiusUsers.Count, subscriberIds.Count);
 
             if (radiusUsers.Count == 0) return;
 
@@ -135,7 +147,14 @@ namespace QabrWebApp.Services
                 .Where(u => u.LegacyToken is not null && !newTokenSet.Contains(u.LegacyToken))
                 .Select(u => (Token: u.LegacyToken!, Language: u.Language));
             var allTokens = newTokens.Concat(legacyTokens).DistinctBy(x => x.Token).ToList();
-            if (allTokens.Count == 0) return;
+
+            if (allTokens.Count == 0)
+            {
+                _logger.LogWarning("[Radius] MosqueeId={MosqueeId} → {UserCount} user(s) trouvés mais aucun token Expo valide", mosqueeId, radiusUsers.Count);
+                return;
+            }
+
+            _logger.LogInformation("[Radius] MosqueeId={MosqueeId} → envoi à {TokenCount} token(s)", mosqueeId, allTokens.Count);
 
             var mosqueeNom = priere.Mosquee?.Nom ?? mosquee.Nom ?? "une mosquée";
             var messages = allTokens.Select(tl =>

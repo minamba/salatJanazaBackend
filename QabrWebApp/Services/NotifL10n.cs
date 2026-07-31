@@ -36,12 +36,27 @@ namespace QabrWebApp.Services
         private static Strings Get(string? lang) =>
             _map.TryGetValue(lang ?? "fr", out var s) ? s : _map["fr"];
 
+        // Parses "NOM" "PRÉNOM" quoted storage format → "NOM PRÉNOM" without quotes.
+        private static string FormatDisplayName(string? nomDefunt)
+        {
+            if (string.IsNullOrEmpty(nomDefunt)) return "";
+            var matches = System.Text.RegularExpressions.Regex.Matches(nomDefunt, "\"([^\"]+)\"");
+            if (matches.Count > 0)
+            {
+                var parts = new System.Collections.Generic.List<string>();
+                foreach (System.Text.RegularExpressions.Match m in matches)
+                    parts.Add(m.Groups[1].Value.Trim());
+                return string.Join(" ", parts);
+            }
+            return nomDefunt.Trim();
+        }
+
         public static (string Title, string Body) BuildJanazaNotif(
             string? lang, bool isAnonymous, string? nomDefunt, string? genre,
             string mosqueeNom, DateTime dateLocale)
         {
             var s = Get(lang);
-            var defunt = (isAnonymous || string.IsNullOrEmpty(nomDefunt)) ? s.Anonymous : nomDefunt;
+            var defunt = (isAnonymous || string.IsNullOrEmpty(nomDefunt)) ? s.Anonymous : FormatDisplayName(nomDefunt);
             var genreLabel = genre?.ToLower() switch {
                 "homme" => s.Male, "femme" => s.Female, "enfant" => s.Child, _ => null
             };
@@ -57,7 +72,7 @@ namespace QabrWebApp.Services
             string mosqueeNom, DateTime dateLocale)
         {
             var s = Get(lang);
-            var defunt = (isAnonymous || string.IsNullOrEmpty(nomDefunt)) ? s.Anonymous : nomDefunt;
+            var defunt = (isAnonymous || string.IsNullOrEmpty(nomDefunt)) ? s.Anonymous : FormatDisplayName(nomDefunt);
             var genreLabel = genre?.ToLower() switch {
                 "homme" => s.Male, "femme" => s.Female, "enfant" => s.Child, _ => null
             };
