@@ -28,29 +28,34 @@ namespace QabrWebApp.Controllers
             [FromQuery] string  type             = "declarations")
         {
             if (!DateTime.TryParse(date, out var refDate))
-                refDate = DateTime.UtcNow.Date;
+                refDate = DateTime.UtcNow.AddMinutes(utcOffsetMinutes).Date;
 
-            DateTime start, end;
+            // localStart/localEnd = bornes dans le fuseau du client
+            DateTime localStart, localEnd;
             switch (period)
             {
                 case "semaine":
                     int dow = ((int)refDate.DayOfWeek + 6) % 7;
-                    start = refDate.Date.AddDays(-dow);
-                    end   = start.AddDays(7);
+                    localStart = refDate.Date.AddDays(-dow);
+                    localEnd   = localStart.AddDays(7);
                     break;
                 case "mois":
-                    start = new DateTime(refDate.Year, refDate.Month, 1);
-                    end   = start.AddMonths(1);
+                    localStart = new DateTime(refDate.Year, refDate.Month, 1);
+                    localEnd   = localStart.AddMonths(1);
                     break;
                 case "annee":
-                    start = new DateTime(refDate.Year, 1, 1);
-                    end   = new DateTime(refDate.Year + 1, 1, 1);
+                    localStart = new DateTime(refDate.Year, 1, 1);
+                    localEnd   = new DateTime(refDate.Year + 1, 1, 1);
                     break;
                 default:
-                    start = refDate.Date;
-                    end   = start.AddDays(1);
+                    localStart = refDate.Date;
+                    localEnd   = localStart.AddDays(1);
                     break;
             }
+
+            // Conversion en UTC pour les requêtes SQL (DateCreation stockée en UTC)
+            DateTime start = localStart.AddMinutes(-utcOffsetMinutes);
+            DateTime end   = localEnd.AddMinutes(-utcOffsetMinutes);
 
             DateTime ToLocal(DateTime utc) => utc.AddMinutes(utcOffsetMinutes);
 
@@ -121,29 +126,34 @@ namespace QabrWebApp.Controllers
             [FromQuery] int     utcOffsetMinutes = 0)
         {
             if (!DateTime.TryParse(date, out var refDate))
-                refDate = DateTime.UtcNow.Date;
+                refDate = DateTime.UtcNow.AddMinutes(utcOffsetMinutes).Date;
 
-            DateTime start, end;
+            // localStart/localEnd = bornes dans le fuseau du client
+            DateTime localStart, localEnd;
             switch (period)
             {
                 case "semaine":
                     int dow = ((int)refDate.DayOfWeek + 6) % 7;
-                    start = refDate.Date.AddDays(-dow);
-                    end   = start.AddDays(7);
+                    localStart = refDate.Date.AddDays(-dow);
+                    localEnd   = localStart.AddDays(7);
                     break;
                 case "mois":
-                    start = new DateTime(refDate.Year, refDate.Month, 1);
-                    end   = start.AddMonths(1);
+                    localStart = new DateTime(refDate.Year, refDate.Month, 1);
+                    localEnd   = localStart.AddMonths(1);
                     break;
                 case "annee":
-                    start = new DateTime(refDate.Year, 1, 1);
-                    end   = new DateTime(refDate.Year + 1, 1, 1);
+                    localStart = new DateTime(refDate.Year, 1, 1);
+                    localEnd   = new DateTime(refDate.Year + 1, 1, 1);
                     break;
                 default: // jour
-                    start = refDate.Date;
-                    end   = start.AddDays(1);
+                    localStart = refDate.Date;
+                    localEnd   = localStart.AddDays(1);
                     break;
             }
+
+            // Conversion en UTC pour les requêtes SQL (DateCreation stockée en UTC)
+            DateTime start = localStart.AddMinutes(-utcOffsetMinutes);
+            DateTime end   = localEnd.AddMinutes(-utcOffsetMinutes);
 
             // ── Declarations — lues depuis l'historique (survit à la purge) ─────────
             IQueryable<PriereJanazaHistorique> declQuery = _db.PrieresJanazaHistorique.AsNoTracking()
@@ -185,13 +195,13 @@ namespace QabrWebApp.Controllers
                         .ToList();
                 if (period == "semaine")
                     return Enumerable.Range(0, 7)
-                        .Select(d => new SeriesPointDto { label = $"{dayAbbr[d]} {start.AddDays(d):dd/MM}", value = declarations.Count(x => ToLocal(x.DateCreation).Date == start.AddDays(d).Date) })
+                        .Select(d => new SeriesPointDto { label = $"{dayAbbr[d]} {localStart.AddDays(d):dd/MM}", value = declarations.Count(x => ToLocal(x.DateCreation).Date == localStart.AddDays(d).Date) })
                         .ToList();
                 if (period == "mois")
                 {
-                    int days = (int)(end - start).TotalDays;
+                    int days = (int)(localEnd - localStart).TotalDays;
                     return Enumerable.Range(0, days)
-                        .Select(d => new SeriesPointDto { label = start.AddDays(d).Day.ToString(), value = declarations.Count(x => ToLocal(x.DateCreation).Date == start.AddDays(d).Date) })
+                        .Select(d => new SeriesPointDto { label = localStart.AddDays(d).Day.ToString(), value = declarations.Count(x => ToLocal(x.DateCreation).Date == localStart.AddDays(d).Date) })
                         .ToList();
                 }
                 return Enumerable.Range(0, 12)
@@ -207,13 +217,13 @@ namespace QabrWebApp.Controllers
                         .ToList();
                 if (period == "semaine")
                     return Enumerable.Range(0, 7)
-                        .Select(d => new SeriesPointDto { label = $"{dayAbbr[d]} {start.AddDays(d):dd/MM}", value = users.Count(u => ToLocal(u).Date == start.AddDays(d).Date) })
+                        .Select(d => new SeriesPointDto { label = $"{dayAbbr[d]} {localStart.AddDays(d):dd/MM}", value = users.Count(u => ToLocal(u).Date == localStart.AddDays(d).Date) })
                         .ToList();
                 if (period == "mois")
                 {
-                    int days = (int)(end - start).TotalDays;
+                    int days = (int)(localEnd - localStart).TotalDays;
                     return Enumerable.Range(0, days)
-                        .Select(d => new SeriesPointDto { label = start.AddDays(d).Day.ToString(), value = users.Count(u => ToLocal(u).Date == start.AddDays(d).Date) })
+                        .Select(d => new SeriesPointDto { label = localStart.AddDays(d).Day.ToString(), value = users.Count(u => ToLocal(u).Date == localStart.AddDays(d).Date) })
                         .ToList();
                 }
                 return Enumerable.Range(0, 12)

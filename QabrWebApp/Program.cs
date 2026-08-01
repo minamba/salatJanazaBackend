@@ -14,6 +14,8 @@ using QabrWebApp.Services;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://0.0.0.0:5168");
 
+Stripe.StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"];
+
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 builder.Services.AddEndpointsApiExplorer();
@@ -91,6 +93,9 @@ builder.Services.AddScoped<IAbonnementViewModelBuilder, AbonnementViewModelBuild
 
 // Telegram notification builder (singleton : sans état, dépend uniquement de singletons)
 builder.Services.AddSingleton<ITelegramNotificationBuilder, TelegramNotificationBuilder>();
+
+// Feature flags (fichier features.json, pas de migration DB nécessaire)
+builder.Services.AddSingleton<FeatureFlagsService>();
 
 // Background services
 builder.Services.AddHostedService<PriereJanazaCleanupService>();
