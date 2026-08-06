@@ -12,5 +12,12 @@ namespace QabrWebApp.Services
         Task SendPermissionUpdateAsync(string expoToken, bool canImportFlyer);
         Task SendPermissionUpdateToManyAsync(IEnumerable<string> expoTokens, bool canImportFlyer);
         Task NotifyRadiusUsersAsync(int mosqueeId, PriereJanaza priere);
+
+        /// <summary>
+        /// Tous ceux qui doivent entendre parler de cette mosquée : ses abonnés,
+        /// plus les utilisateurs qui l'ont dans leur rayon sans y être abonnés.
+        /// Dédoublonné par jeton — personne ne reçoit deux fois.
+        /// </summary>
+        Task<IReadOnlyList<(string Token, string Language)>> GetDestinatairesMosqueeAsync(int mosqueeId);
     }
 }

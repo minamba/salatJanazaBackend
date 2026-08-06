@@ -33,8 +33,6 @@ namespace QabrWebApp.Services
             {
                 using var scope = _scopeFactory.CreateScope();
                 var rappelRepo = scope.ServiceProvider.GetRequiredService<IRappelPushRepository>();
-                var abonnementRepo = scope.ServiceProvider.GetRequiredService<IAbonnementRepository>();
-                var tokenRepo = scope.ServiceProvider.GetRequiredService<IUtilisateurTokenRepository>();
                 var push = scope.ServiceProvider.GetRequiredService<IPushNotificationService>();
 
                 var pending = await rappelRepo.GetPendingAsync();
@@ -46,14 +44,12 @@ namespace QabrWebApp.Services
                 {
                     try
                     {
-                        var abonnes = await abonnementRepo.GetByMosqueeIdAsync(rappel.MosqueeId);
-                        var userIds = abonnes.Select(a => a.UtilisateurId).Distinct().ToList();
-                        var newTokens = await tokenRepo.GetTokensWithLanguageByUserIdsAsync(userIds);
-                        var newTokenSet = newTokens.Select(x => x.Token).ToHashSet();
-                        var legacyTokens = abonnes
-                            .Where(a => a.Utilisateur?.ExpoToken is not null && !newTokenSet.Contains(a.Utilisateur.ExpoToken))
-                            .Select(a => (Token: a.Utilisateur!.ExpoToken!, Language: a.Utilisateur.Language ?? "fr"));
-                        var allTokens = newTokens.Concat(legacyTokens).DistinctBy(x => x.Token).ToList();
+                        // Abonnés ET riverains : la même liste que pour la
+                        // déclaration. Avant, ce service ne connaissait que les
+                        // abonnés — quelqu'un ayant la mosquée dans son rayon
+                        // apprenait le décès puis n'était jamais rappelé, alors
+                        // que c'est le rappel qui permet de s'y rendre.
+                        var allTokens = await push.GetDestinatairesMosqueeAsync(rappel.MosqueeId);
 
                         if (allTokens.Count > 0)
                         {

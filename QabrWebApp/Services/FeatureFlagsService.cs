@@ -1,4 +1,6 @@
-using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using QabrWebApp.Dal.Entities;
 
 namespace QabrWebApp.Services
 {
@@ -9,45 +11,54 @@ namespace QabrWebApp.Services
 
     public class FeatureFlagsService
     {
-        private readonly string _filePath;
-        private FeatureFlagsDto _flags;
-        private readonly SemaphoreSlim _lock = new(1, 1);
+        private const string KEY_DONATION = "donationButtonVisible";
 
-        public FeatureFlagsService(IWebHostEnvironment env)
+        private readonly IServiceScopeFactory _scopeFactory;
+        private readonly SemaphoreSlim _lock = new(1, 1);
+        private FeatureFlagsDto _cache = new();
+
+        public FeatureFlagsService(IServiceScopeFactory scopeFactory)
         {
-            _filePath = Path.Combine(env.ContentRootPath, "features.json");
-            _flags = Load();
+            _scopeFactory = scopeFactory;
         }
 
-        private FeatureFlagsDto Load()
+        public async Task InitAsync()
         {
-            if (!File.Exists(_filePath)) return new FeatureFlagsDto();
+            await _lock.WaitAsync();
             try
             {
-                var json = File.ReadAllText(_filePath);
-                return JsonSerializer.Deserialize<FeatureFlagsDto>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                    ?? new FeatureFlagsDto();
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
+                var setting = await db.AppSettings.FindAsync(KEY_DONATION);
+                if (setting != null && bool.TryParse(setting.Value, out var val))
+                    _cache.DonationButtonVisible = val;
             }
-            catch { return new FeatureFlagsDto(); }
+            finally { _lock.Release(); }
         }
 
-        public FeatureFlagsDto Get() => _flags;
+        public FeatureFlagsDto Get() => _cache;
 
         public async Task<FeatureFlagsDto> SetDonationButtonAsync(bool visible)
         {
             await _lock.WaitAsync();
             try
             {
-                _flags.DonationButtonVisible = visible;
-                var json = JsonSerializer.Serialize(_flags, new JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(_filePath, json);
-                return _flags;
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
+                var setting = await db.AppSettings.FindAsync(KEY_DONATION);
+                if (setting == null)
+                {
+                    db.AppSettings.Add(new AppSetting { Key = KEY_DONATION, Value = visible.ToString() });
+                }
+                else
+                {
+                    setting.Value = visible.ToString();
+                }
+                await db.SaveChangesAsync();
+                _cache.DonationButtonVisible = visible;
+                return _cache;
             }
-            finally
-            {
-                _lock.Release();
-            }
+            finally { _lock.Release(); }
         }
     }
 }

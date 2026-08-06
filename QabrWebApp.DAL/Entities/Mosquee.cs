@@ -15,6 +15,24 @@ namespace QabrWebApp.Dal.Entities
         [MaxLength(500)]
         public string? Adresse { get; set; }
 
+        // Ville et pays ne sont PAS extraits de l'adresse : ils viennent d'un
+        // géocodage inverse sur les coordonnées ci-dessous, donc d'une donnée
+        // structurée et non d'un texte libre. L'adresse, elle, est saisie à la
+        // main ou recopiée d'OpenStreetMap, sous des formes inconciliables —
+        // « Rue Morand, 75011 Paris » et « …, Évry, Essonne, 91000, France »
+        // cohabitent dans la même colonne.
+        //
+        // Nullable à dessein : Nominatim ne connaît pas tous les points du
+        // globe, et une mosquée sans ville doit rester visible plutôt que de
+        // disparaître des listes.
+        [MaxLength(120)]
+        public string? Ville { get; set; }
+
+        // Le nom du pays en clair (« France »), pas le code ISO : c'est ce que
+        // l'administration affiche, et rien d'autre n'en dépend.
+        [MaxLength(80)]
+        public string? Pays { get; set; }
+
         public double Latitude { get; set; }
         public double Longitude { get; set; }
 

@@ -14,6 +14,7 @@ namespace QabrWebApp.Dal.Entities
         public DbSet<Abonnement>                Abonnements               { get; set; }
         public DbSet<RappelPush>                RappelsPush               { get; set; }
         public DbSet<UtilisateurToken>          UtilisateurTokens         { get; set; }
+        public DbSet<AppSetting>                AppSettings               { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

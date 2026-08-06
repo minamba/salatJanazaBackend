@@ -5,6 +5,8 @@ namespace QabrWebApp.ViewModels
         public int Id { get; set; }
         public string Nom { get; set; } = string.Empty;
         public string? Adresse { get; set; }
+        public string? Ville { get; set; }
+        public string? Pays { get; set; }
         public double Latitude { get; set; }
         public double Longitude { get; set; }
         public string? OsmId { get; set; }

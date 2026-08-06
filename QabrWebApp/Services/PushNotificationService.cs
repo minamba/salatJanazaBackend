@@ -64,6 +64,85 @@ namespace QabrWebApp.Services
             await SendBatchAsync(messages);
         }
 
+        /// <summary>
+        /// Qui doit entendre parler de cette mosquée : ses abonnés, PLUS les
+        /// utilisateurs qui l'ont dans leur rayon sans y être abonnés.
+        ///
+        /// POURQUOI CETTE MÉTHODE EXISTE
+        /// -----------------------------
+        /// La règle était écrite deux fois, à deux endroits qui n'en
+        /// connaissaient chacun qu'une moitié : la déclaration appelait les
+        /// abonnés puis le rayon, le rappel n'appelait que les abonnés. Les
+        /// riverains recevaient donc l'annonce du décès et jamais le rappel
+        /// avant la prière. Une seule définition, un seul comportement.
+        ///
+        /// RÉSOLU À L'ENVOI, PAS À LA PROGRAMMATION
+        /// ----------------------------------------
+        /// Le rappel part trente minutes avant la prière et interroge les
+        /// positions à ce moment-là. Quelqu'un qui s'est rapproché depuis la
+        /// déclaration sera prévenu ; quelqu'un qui s'est éloigné ne le sera
+        /// pas. C'est le comportement voulu : le rayon dit « puis-je m'y
+        /// rendre maintenant », pas « où étais-je hier ».
+        /// </summary>
+        public async Task<IReadOnlyList<(string Token, string Language)>> GetDestinatairesMosqueeAsync(int mosqueeId)
+        {
+            var abonnes = await _abonnementRepo.GetByMosqueeIdAsync(mosqueeId);
+            var abonneIds = abonnes.Select(a => a.UtilisateurId).ToHashSet();
+
+            var jetonsAbonnes = await _tokenRepo.GetTokensWithLanguageByUserIdsAsync(abonneIds);
+            var connus = jetonsAbonnes.Select(x => x.Token).ToHashSet();
+
+            // Ancien champ ExpoToken porté par l'utilisateur lui-même : encore
+            // le seul jeton de ceux qui n'ont pas rouvert l'application depuis
+            // la table dédiée. Les ignorer reviendrait à cesser de les notifier.
+            var legacyAbonnes = abonnes
+                .Where(a => a.Utilisateur?.ExpoToken is not null && !connus.Contains(a.Utilisateur.ExpoToken))
+                .Select(a => (Token: a.Utilisateur!.ExpoToken!, Language: a.Utilisateur.Language ?? "fr"));
+
+            IEnumerable<(string Token, string Language)> jetonsRayon = [];
+
+            var mosquee = await _mosqueeRepo.GetByIdAsync(mosqueeId);
+            if (mosquee is null)
+            {
+                // Les abonnés restent joignables : leur lien ne dépend pas des
+                // coordonnées. On perd le rayon, et on le dit.
+                _logger.LogWarning(
+                    "[Destinataires] MosqueeId={MosqueeId} introuvable — seuls les abonnés seront notifiés", mosqueeId);
+            }
+            else
+            {
+                // Les abonnés sont exclus de la requête : ils sont déjà dans la
+                // liste, et les compter ici ferait deux fois le travail.
+                var riverains = await _utilisateurRepo.GetUsersInRadiusAsync(
+                    mosquee.Latitude, mosquee.Longitude, abonneIds);
+
+                var jetonsRiverains = await _tokenRepo.GetTokensWithLanguageByUserIdsAsync(
+                    riverains.Select(u => u.UserId));
+                var connusRiverains = jetonsRiverains.Select(x => x.Token).ToHashSet();
+
+                var legacyRiverains = riverains
+                    .Where(u => u.LegacyToken is not null && !connusRiverains.Contains(u.LegacyToken))
+                    .Select(u => (Token: u.LegacyToken!, Language: u.Language));
+
+                jetonsRayon = jetonsRiverains.Concat(legacyRiverains);
+            }
+
+            // Le dédoublonnage final est indispensable et non redondant : un
+            // même appareil peut porter un jeton moderne et un jeton hérité, et
+            // rien n'empêche deux comptes de partager un téléphone.
+            var tous = jetonsAbonnes
+                .Concat(legacyAbonnes)
+                .Concat(jetonsRayon)
+                .DistinctBy(x => x.Token)
+                .ToList();
+
+            _logger.LogInformation(
+                "[Destinataires] MosqueeId={MosqueeId} → {Total} jeton(s) : {Abonnes} via abonnement, {Rayon} via rayon",
+                mosqueeId, tous.Count, jetonsAbonnes.Count, jetonsRayon.Count());
+
+            return tous;
+        }
+
         public async Task RescheduleMosqueeReminderAsync(int mosqueeId, PriereJanaza priere)
         {
             await _rappelRepo.DeletePendingByPriereIdAsync(priere.Id);

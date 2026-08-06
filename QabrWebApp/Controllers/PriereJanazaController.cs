@@ -1,7 +1,9 @@
 using GeoTimeZone;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using QabrWebApp.Builders;
 using QabrWebApp.Domain.Models;
+using DalEntities = QabrWebApp.Dal.Entities;
 using QabrWebApp.Domain.Services;
 using QabrWebApp.Request;
 using QabrWebApp.Services;
@@ -56,6 +58,7 @@ namespace QabrWebApp.Controllers
         private readonly ITelegramNotificationBuilder _telegram;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<PriereJanazaController> _logger;
+        private readonly DalEntities.QabrWebAppDatabaseContext _db;
 
         public PriereJanazaController(
             IPriereJanazaService service,
@@ -70,7 +73,8 @@ namespace QabrWebApp.Controllers
             ITextImportSummaryService textImportSummary,
             ITelegramNotificationBuilder telegram,
             IServiceScopeFactory scopeFactory,
-            ILogger<PriereJanazaController> logger)
+            ILogger<PriereJanazaController> logger,
+            DalEntities.QabrWebAppDatabaseContext db)
         {
             _service = service;
             _builder = builder;
@@ -85,6 +89,7 @@ namespace QabrWebApp.Controllers
             _telegram = telegram;
             _scopeFactory = scopeFactory;
             _logger = logger;
+            _db = db;
         }
 
         // Exécute une notification en arrière-plan dans son propre scope DI (DbContext isolé).
@@ -1137,6 +1142,41 @@ namespace QabrWebApp.Controllers
                 [System.Text.Json.Serialization.JsonPropertyName("country_code")]
                 public string? CountryCode { get; set; }
             }
+        }
+
+        [HttpGet("historique")]
+        [SwaggerOperation(Summary = "Liste l'historique dénormalisé des prières (table PrieresJanazaHistorique)")]
+        public async Task<IActionResult> GetHistorique()
+        {
+            var rows = await _db.PrieresJanazaHistorique
+                .AsNoTracking()
+                .OrderByDescending(h => h.DateCreation)
+                .Select(h => new
+                {
+                    h.Id,
+                    h.DateCreation,
+                    h.Genre,
+                    h.NomDefunt,
+                    h.EstAnonyme,
+                    h.DeclarantPrenom,
+                    h.DeclarantNom,
+                    h.MosqueeNom,
+                    h.Pays,
+                    h.VilleEnterrement,
+                })
+                .ToListAsync();
+            return Ok(rows);
+        }
+
+        [HttpDelete("historique/{id:int}")]
+        [SwaggerOperation(Summary = "Supprime une entrée de l'historique")]
+        public async Task<IActionResult> DeleteHistorique(int id)
+        {
+            var row = await _db.PrieresJanazaHistorique.FindAsync(id);
+            if (row is null) return NotFound();
+            _db.PrieresJanazaHistorique.Remove(row);
+            await _db.SaveChangesAsync();
+            return NoContent();
         }
     }
 }

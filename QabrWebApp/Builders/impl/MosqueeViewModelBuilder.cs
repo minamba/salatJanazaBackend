@@ -10,6 +10,8 @@ namespace QabrWebApp.Builders.impl
             Id = mosquee.Id,
             Nom = mosquee.Nom,
             Adresse = mosquee.Adresse,
+            Ville = mosquee.Ville,
+            Pays = mosquee.Pays,
             Latitude = mosquee.Latitude,
             Longitude = mosquee.Longitude,
             OsmId = mosquee.OsmId,

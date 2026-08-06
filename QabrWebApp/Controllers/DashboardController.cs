@@ -87,30 +87,35 @@ namespace QabrWebApp.Controllers
             }
             else
             {
-                var raw = await _db.PrieresJanazaHistorique.AsNoTracking()
+                // Historique preferred (has declarant name); live fills records not yet in historique.
+                var histoRaw = await _db.PrieresJanazaHistorique.AsNoTracking()
                     .Where(p => p.DateCreation >= start && p.DateCreation < end)
-                    .Select(p => new
-                    {
-                        p.NomDefunt,
-                        p.EstAnonyme,
-                        p.Genre,
-                        p.DateCreation,
-                        p.DeclarantPrenom,
-                        p.DeclarantNom,
-                    })
+                    .Select(p => new { p.NomDefunt, p.EstAnonyme, p.Genre, p.DateCreation, p.DeclarantPrenom, p.DeclarantNom })
                     .ToListAsync();
 
-                var result = raw
+                var liveRaw = await _db.PrieresJanaza.AsNoTracking()
+                    .Where(p => p.DateCreation >= start && p.DateCreation < end)
+                    .Select(p => new { p.NomDefunt, p.EstAnonyme, p.Genre, p.DateCreation })
+                    .ToListAsync();
+
+                var histoDates = new HashSet<DateTime>(histoRaw.Select(r => r.DateCreation));
+
+                DeclDetailDto ToDto(string? nom, bool anon, string? genre, DateTime utcDate, string? prenom, string? nomDecl) => new()
+                {
+                    nomDefunt        = nom,
+                    estAnonyme       = anon,
+                    genre            = genre,
+                    heureDeclaration = ToLocal(utcDate).ToString("HH:mm"),
+                    declarantPrenom  = prenom,
+                    declarantNom     = nomDecl,
+                };
+
+                var result = histoRaw
                     .Where(r => InSlot(r.DateCreation))
-                    .Select(r => new DeclDetailDto
-                    {
-                        nomDefunt        = r.NomDefunt,
-                        estAnonyme       = r.EstAnonyme,
-                        genre            = r.Genre,
-                        heureDeclaration = ToLocal(r.DateCreation).ToString("HH:mm"),
-                        declarantPrenom  = r.DeclarantPrenom,
-                        declarantNom     = r.DeclarantNom,
-                    });
+                    .Select(r => ToDto(r.NomDefunt, r.EstAnonyme, r.Genre, r.DateCreation, r.DeclarantPrenom, r.DeclarantNom))
+                    .Concat(liveRaw
+                        .Where(r => !histoDates.Contains(r.DateCreation) && InSlot(r.DateCreation))
+                        .Select(r => ToDto(r.NomDefunt, r.EstAnonyme, r.Genre, r.DateCreation, null, null)));
 
                 return Ok(result);
             }
@@ -155,16 +160,37 @@ namespace QabrWebApp.Controllers
             DateTime start = localStart.AddMinutes(-utcOffsetMinutes);
             DateTime end   = localEnd.AddMinutes(-utcOffsetMinutes);
 
-            // ── Declarations — lues depuis l'historique (survit à la purge) ─────────
-            IQueryable<PriereJanazaHistorique> declQuery = _db.PrieresJanazaHistorique.AsNoTracking()
+            // ── Declarations — live table is primary source (correct mosque name via FK join).
+            // Historique fills in records purged from the live table.
+            IQueryable<PriereJanaza> liveQuery = _db.PrieresJanaza.AsNoTracking()
+                .Where(p => p.DateCreation >= start && p.DateCreation < end);
+            IQueryable<PriereJanazaHistorique> histoQuery = _db.PrieresJanazaHistorique.AsNoTracking()
                 .Where(p => p.DateCreation >= start && p.DateCreation < end);
 
-            if (!string.IsNullOrEmpty(genre)) declQuery = declQuery.Where(p => p.Genre == genre);
-            if (!string.IsNullOrEmpty(pays))  declQuery = declQuery.Where(p => p.Pays  == pays);
+            if (!string.IsNullOrEmpty(genre))
+            {
+                liveQuery  = liveQuery.Where(p => p.Genre == genre);
+                histoQuery = histoQuery.Where(p => p.Genre == genre);
+            }
+            if (!string.IsNullOrEmpty(pays))
+            {
+                liveQuery  = liveQuery.Where(p => p.PaysEnterrement == pays);
+                histoQuery = histoQuery.Where(p => p.Pays == pays);
+            }
 
-            var declarations = await declQuery
+            var liveDecls = await liveQuery
+                .Select(p => new { p.DateCreation, p.Genre, PaysEnterrement = p.PaysEnterrement, MosqueeNom = p.Mosquee != null ? p.Mosquee.Nom : null })
+                .ToListAsync();
+
+            var histoDecls = await histoQuery
                 .Select(p => new { p.DateCreation, p.Genre, PaysEnterrement = p.Pays, MosqueeNom = p.MosqueeNom })
                 .ToListAsync();
+
+            // Prefer live entries; historique fills in only truly purged records
+            var liveKeys   = new HashSet<DateTime>(liveDecls.Select(d => d.DateCreation));
+            var declarations = liveDecls
+                .Concat(histoDecls.Where(h => !liveKeys.Contains(h.DateCreation)))
+                .ToList();
 
             // ── Users ─────────────────────────────────────────────────────────────
             var users = await _db.Utilisateurs.AsNoTracking()
@@ -252,14 +278,14 @@ namespace QabrWebApp.Controllers
                         .GroupBy(d => d.PaysEnterrement!)
                         .Select(g => new PaysCountDto { pays = g.Key, count = g.Count() })
                         .OrderByDescending(x => x.count)
-                        .Take(10)
                         .ToList(),
+                    paysInconnu = declarations.Count(d => string.IsNullOrEmpty(d.PaysEnterrement)),
+                    mosqueeInconnu = declarations.Count(d => string.IsNullOrEmpty(d.MosqueeNom)),
                     byMosquee = declarations
                         .Where(d => !string.IsNullOrEmpty(d.MosqueeNom))
                         .GroupBy(d => d.MosqueeNom!)
                         .Select(g => new MosqueeCountDto { nom = g.Key, count = g.Count() })
                         .OrderByDescending(x => x.count)
-                        .Take(10)
                         .ToList()
                 },
                 utilisateurs = new

@@ -31,5 +31,8 @@ namespace QabrWebApp.Dal.Entities
 
         [MaxLength(100)]
         public string? Pays { get; set; }
+
+        [MaxLength(200)]
+        public string? VilleEnterrement { get; set; }
     }
 }

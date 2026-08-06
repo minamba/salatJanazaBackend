@@ -434,6 +434,7 @@ namespace QabrWebApp.Dal.Repositories
         private static DomainModel.Mosquee ToModel(Mosquee e) => new()
         {
             Id = e.Id, Nom = e.Nom, Adresse = e.Adresse,
+            Ville = e.Ville, Pays = e.Pays,
             Latitude = e.Latitude, Longitude = e.Longitude,
             OsmId = e.OsmId, Statut = e.Statut, Source = e.Source,
             DateCreation = e.DateCreation, DerniereSyncOsm = e.DerniereSyncOsm,
@@ -443,6 +444,7 @@ namespace QabrWebApp.Dal.Repositories
         private static Mosquee ToEntity(DomainModel.Mosquee m) => new()
         {
             Id = m.Id, Nom = m.Nom, Adresse = m.Adresse,
+            Ville = m.Ville, Pays = m.Pays,
             Latitude = m.Latitude, Longitude = m.Longitude,
             OsmId = m.OsmId, Statut = m.Statut, Source = m.Source,
             DateCreation = m.DateCreation, DerniereSyncOsm = m.DerniereSyncOsm,

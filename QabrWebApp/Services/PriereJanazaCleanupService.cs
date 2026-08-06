@@ -42,7 +42,7 @@ namespace QabrWebApp.Services
                 var db = scope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
 
                 var expired = await db.PrieresJanaza
-                    .Where(p => p.DateHeurePriere < cutoff)
+                    .Where(p => p.DateHeurePriere.AddMinutes(-p.UtcOffsetMinutes) < cutoff)
                     .ToListAsync(ct);
 
                 if (expired.Count == 0) return;

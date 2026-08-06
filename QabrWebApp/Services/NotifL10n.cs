@@ -31,6 +31,8 @@ namespace QabrWebApp.Services
             ["de"] = new("Unbekannte Person",        "Mann",     "Frau",       "Kind",        "⏰ Erinnerung — Totengebet in 30 Min.",          "um",        "dd.MM."),
             ["it"] = new("Defunto anonimo",          "Uomo",     "Donna",      "Bambino",     "⏰ Promemoria — Salat Janaza tra 30 min",        "alle",      "dd/MM"),
             ["es"] = new("Difunto anónimo",     "Hombre",   "Mujer",      "Niño",   "⏰ Recordatorio — Salat Janaza en 30 min",       "a las",     "dd/MM"),
+            ["bm"] = new("Tɔgɔ tɛ",           "Tchè",     "Muso",       "Dɛnmisɛn", "⏰ Kɔrɔbɔ — Janaza seli miniti 30 kɔnɔ",         "la",        "dd/MM"),
+            ["nl"] = new("Anonieme overledene", "Man",      "Vrouw",      "Kind",    "⏰ Herinnering — Salat Janaza over 30 min",       "om",        "dd/MM"),
         };
 
         private static Strings Get(string? lang) =>

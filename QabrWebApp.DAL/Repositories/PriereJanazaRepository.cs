@@ -104,14 +104,15 @@ namespace QabrWebApp.Dal.Repositories
             // Copie dénormalisée dans la table historique — survivra à toute purge future
             _ctx.PrieresJanazaHistorique.Add(new PriereJanazaHistorique
             {
-                DateCreation    = entity.DateCreation,
-                Genre           = entity.Genre,
-                NomDefunt       = entity.NomDefunt,
-                EstAnonyme      = entity.EstAnonyme,
-                DeclarantPrenom = withNav.Utilisateur?.Prenom,
-                DeclarantNom    = withNav.Utilisateur?.Nom,
-                MosqueeNom      = withNav.Mosquee?.Nom,
-                Pays            = entity.PaysEnterrement,
+                DateCreation      = entity.DateCreation,
+                Genre             = entity.Genre,
+                NomDefunt         = entity.NomDefunt,
+                EstAnonyme        = entity.EstAnonyme,
+                DeclarantPrenom   = withNav.Utilisateur?.Prenom,
+                DeclarantNom      = withNav.Utilisateur?.Nom,
+                MosqueeNom        = withNav.Mosquee?.Nom,
+                Pays              = entity.PaysEnterrement,
+                VilleEnterrement  = entity.VilleEnterrement,
             });
             await _ctx.SaveChangesAsync();
 
@@ -140,6 +141,21 @@ namespace QabrWebApp.Dal.Repositories
                 .Include(p => p.Mosquee)
                 .AsNoTracking()
                 .FirstAsync(p => p.Id == entity.Id);
+
+            // Sync the denormalized snapshot so dashboard stats reflect edits
+            var histo = await _ctx.PrieresJanazaHistorique
+                .FirstOrDefaultAsync(h => h.DateCreation == entity.DateCreation);
+            if (histo != null)
+            {
+                histo.Genre             = entity.Genre;
+                histo.NomDefunt         = entity.NomDefunt;
+                histo.EstAnonyme        = entity.EstAnonyme;
+                histo.Pays              = entity.PaysEnterrement;
+                histo.VilleEnterrement  = entity.VilleEnterrement;
+                histo.MosqueeNom        = withNav.Mosquee?.Nom;
+                await _ctx.SaveChangesAsync();
+            }
+
             return ToModel(withNav);
         }
 

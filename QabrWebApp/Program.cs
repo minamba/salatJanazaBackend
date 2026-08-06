@@ -94,7 +94,7 @@ builder.Services.AddScoped<IAbonnementViewModelBuilder, AbonnementViewModelBuild
 // Telegram notification builder (singleton : sans état, dépend uniquement de singletons)
 builder.Services.AddSingleton<ITelegramNotificationBuilder, TelegramNotificationBuilder>();
 
-// Feature flags (fichier features.json, pas de migration DB nécessaire)
+// Feature flags (persistées en BD via AppSettings)
 builder.Services.AddSingleton<FeatureFlagsService>();
 
 // Background services
@@ -104,6 +104,25 @@ builder.Services.AddHostedService<MosqueeDeduplicationBackgroundService>();
 
 // Deduplication service
 builder.Services.AddScoped<IMosqueeDeduplicationService, MosqueeDeduplicationService>();
+
+// Géocodage inverse : des coordonnées d'une mosquée vers sa ville et son pays.
+// Le User-Agent est EXIGÉ par la politique d'usage de Nominatim — sans lui les
+// requêtes sont refusées, pas ralenties.
+builder.Services.AddHttpClient<IGeocodageInverseService, GeocodageInverseService>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(15);
+    c.DefaultRequestHeaders.Add("User-Agent", "QabrApp/1.0");
+});
+builder.Services.AddScoped<IRattrapageLieuxService, RattrapageLieuxService>();
+
+// Le rattrapage tourne en fond : le même objet est à la fois le service hébergé
+// qui travaille et celui que le contrôleur interroge. D'où le singleton
+// enregistré une fois, puis exposé sous ses deux visages — sans quoi le
+// contrôleur parlerait à une instance différente de celle qui travaille, et
+// verrait un état toujours vide.
+builder.Services.AddSingleton<RattrapageLieuxWorker>();
+builder.Services.AddSingleton<IRattrapageLieuxWorker>(s => s.GetRequiredService<RattrapageLieuxWorker>());
+builder.Services.AddHostedService(s => s.GetRequiredService<RattrapageLieuxWorker>());
 
 // Import flyer services
 builder.Services.AddSingleton<IImportSessionService, ImportSessionService>();
@@ -133,21 +152,71 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
-    var retries = 10;
-    while (retries > 0)
+
+    // ATTENDRE LA BASE, MAIS NE JAMAIS AVALER UN ÉCHEC DE MIGRATION
+    // -------------------------------------------------------------
+    // La version précédente réessayait dix fois puis démarrait quand même, quel
+    // qu'ait été le motif. Deux pannes très différentes se confondaient :
+    //
+    //   • SQL Server pas encore prêt      -> transitoire, réessayer a du sens
+    //   • une migration qui échoue        -> le schéma reste à moitié appliqué
+    //
+    // Dans le second cas, l'API démarrait sur une base incohérente et renvoyait
+    // des 500 sur des routes au hasard, sans qu'aucun message n'ait signalé
+    // quoi que ce soit. Une panne bruyante au démarrage se répare en dix
+    // minutes ; une base à moitié migrée se cherche pendant des jours.
+    //
+    // L'attente est donc séparée de la migration : on patiente tant que la
+    // connexion n'est pas établie, puis on migre UNE fois. Si cela échoue, on
+    // le dit et on refuse de servir.
+    var tentatives = 10;
+    while (!db.Database.CanConnect() && tentatives > 0)
     {
-        try
-        {
-            db.Database.Migrate();
-            break;
-        }
-        catch (Exception)
-        {
-            retries--;
-            if (retries == 0) break;
-            Console.WriteLine($"SQL Server pas encore prêt, nouvelle tentative dans 5s... ({retries} restants)");
-            Thread.Sleep(5000);
-        }
+        tentatives--;
+        Console.WriteLine($"SQL Server pas encore prêt, nouvelle tentative dans 5s... ({tentatives} restantes)");
+        Thread.Sleep(5000);
+    }
+
+    try
+    {
+        db.Database.Migrate();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine();
+        Console.WriteLine("!!! MIGRATION IMPOSSIBLE — L'APPLICATION NE DÉMARRERA PAS !!!");
+        Console.WriteLine($"    {ex.GetType().Name} : {ex.Message}");
+        if (ex.InnerException is { } interne)
+            Console.WriteLine($"    cause : {interne.GetType().Name} : {interne.Message}");
+        Console.WriteLine();
+        Console.WriteLine("    Le schéma de la base est peut-être partiellement appliqué.");
+        Console.WriteLine("    Vérifiez les migrations déjà enregistrées :");
+        Console.WriteLine("      SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId DESC;");
+        Console.WriteLine();
+
+        // On relance : mieux vaut un container qui redémarre en boucle, visible
+        // dans les journaux, qu'une API qui répond à moitié.
+        throw;
+    }
+
+    // Table AppSettings — feature flags persistés en BD
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.objects
+                WHERE object_id = OBJECT_ID(N'AppSettings') AND type = N'U'
+            )
+            CREATE TABLE [AppSettings] (
+                [Key]   nvarchar(100)  NOT NULL,
+                [Value] nvarchar(1000) NULL,
+                CONSTRAINT [PK_AppSettings] PRIMARY KEY ([Key])
+            );
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Warning AppSettings : {ex.Message}");
     }
 
     // Colonnes ajoutées manuellement — idempotent, safe à rejouer à chaque démarrage
@@ -176,15 +245,16 @@ using (var scope = app.Services.CreateScope())
             )
             BEGIN
                 CREATE TABLE [PrieresJanazaHistorique] (
-                    [Id]              INT IDENTITY(1,1)  NOT NULL,
-                    [DateCreation]    DATETIME2(7)       NOT NULL,
-                    [Genre]           NVARCHAR(10)       NULL,
-                    [NomDefunt]       NVARCHAR(200)      NULL,
-                    [EstAnonyme]      BIT                NOT NULL DEFAULT 0,
-                    [DeclarantPrenom] NVARCHAR(100)      NULL,
-                    [DeclarantNom]    NVARCHAR(100)      NULL,
-                    [MosqueeNom]      NVARCHAR(300)      NULL,
-                    [Pays]            NVARCHAR(100)      NULL,
+                    [Id]               INT IDENTITY(1,1)  NOT NULL,
+                    [DateCreation]     DATETIME2(7)       NOT NULL,
+                    [Genre]            NVARCHAR(10)       NULL,
+                    [NomDefunt]        NVARCHAR(200)      NULL,
+                    [EstAnonyme]       BIT                NOT NULL DEFAULT 0,
+                    [DeclarantPrenom]  NVARCHAR(100)      NULL,
+                    [DeclarantNom]     NVARCHAR(100)      NULL,
+                    [MosqueeNom]       NVARCHAR(300)      NULL,
+                    [Pays]             NVARCHAR(100)      NULL,
+                    [VilleEnterrement] NVARCHAR(200)      NULL,
                     CONSTRAINT [PK_PrieresJanazaHistorique] PRIMARY KEY ([Id])
                 );
                 CREATE INDEX [IX_PrieresJanazaHistorique_DateCreation]
@@ -195,6 +265,28 @@ using (var scope = app.Services.CreateScope())
     catch (Exception ex)
     {
         Console.WriteLine($"[Startup] Warning PrieresJanazaHistorique : {ex.Message}");
+    }
+
+    // Colonnes ajoutées progressivement — idempotent
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID(N'PrieresJanaza') AND name = N'VilleEnterrement'
+            )
+            ALTER TABLE [PrieresJanaza] ADD [VilleEnterrement] nvarchar(200) NULL;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID(N'PrieresJanazaHistorique') AND name = N'VilleEnterrement'
+            )
+            ALTER TABLE [PrieresJanazaHistorique] ADD [VilleEnterrement] nvarchar(200) NULL;
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Warning VilleEnterrement columns : {ex.Message}");
     }
 
     // Backfill historique — exécuté une seule fois si la table est vide
@@ -230,6 +322,9 @@ using (var scope = app.Services.CreateScope())
         Console.WriteLine($"[Startup] Warning backfill historique : {ex.Message}");
     }
 }
+
+try { await app.Services.GetRequiredService<FeatureFlagsService>().InitAsync(); }
+catch (Exception ex) { Console.WriteLine($"[Startup] Warning feature flags: {ex.Message}"); }
 
 app.UseExceptionHandler(errorApp =>
 {

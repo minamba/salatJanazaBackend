@@ -12,27 +12,41 @@ namespace QabrWebApp.Dal.Migrations
     {
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.CreateTable(
-                name: "PrieresJanazaHistorique",
-                columns: table => new
-                {
-                    Id              = table.Column<int>(nullable: false)
-                                          .Annotation("SqlServer:Identity", "1, 1"),
-                    DateCreation    = table.Column<DateTime>(nullable: false),
-                    Genre           = table.Column<string>(type: "nvarchar(10)",  maxLength: 10,  nullable: true),
-                    NomDefunt       = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: true),
-                    EstAnonyme      = table.Column<bool>(nullable: false, defaultValue: false),
-                    DeclarantPrenom = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: true),
-                    DeclarantNom    = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: true),
-                    MosqueeNom      = table.Column<string>(type: "nvarchar(300)", maxLength: 300, nullable: true),
-                    Pays            = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: true),
-                },
-                constraints: table => table.PrimaryKey("PK_PrieresJanazaHistorique", x => x.Id));
+            // SQL brut plutôt que CreateTable, POUR ÊTRE REJOUABLE.
+            //
+            // Cette table est également créée en SQL idempotent par Program.cs
+            // au démarrage — c'est comme cela qu'elle est apparue en production
+            // avant l'existence de cette migration. Un CreateTable nu échouait
+            // donc sur « objet déjà existant » et bloquait toute la chaîne des
+            // migrations derrière lui.
+            //
+            // VilleEnterrement est incluse ici : la migration qui devait
+            // l'ajouter est vide, précisément parce qu'elle ne pouvait pas
+            // s'appliquer à une base vierge où la table n'existait pas encore.
+            migrationBuilder.Sql(@"
+                IF NOT EXISTS (
+                    SELECT 1 FROM sys.objects
+                    WHERE object_id = OBJECT_ID(N'PrieresJanazaHistorique') AND type = N'U'
+                )
+                BEGIN
+                    CREATE TABLE [PrieresJanazaHistorique] (
+                        [Id]               INT IDENTITY(1,1)  NOT NULL,
+                        [DateCreation]     DATETIME2(7)       NOT NULL,
+                        [Genre]            NVARCHAR(10)       NULL,
+                        [NomDefunt]        NVARCHAR(200)      NULL,
+                        [EstAnonyme]       BIT                NOT NULL DEFAULT 0,
+                        [DeclarantPrenom]  NVARCHAR(100)      NULL,
+                        [DeclarantNom]     NVARCHAR(100)      NULL,
+                        [MosqueeNom]       NVARCHAR(300)      NULL,
+                        [Pays]             NVARCHAR(100)      NULL,
+                        [VilleEnterrement] NVARCHAR(200)      NULL,
+                        CONSTRAINT [PK_PrieresJanazaHistorique] PRIMARY KEY ([Id])
+                    );
 
-            migrationBuilder.CreateIndex(
-                name: "IX_PrieresJanazaHistorique_DateCreation",
-                table: "PrieresJanazaHistorique",
-                column: "DateCreation");
+                    CREATE INDEX [IX_PrieresJanazaHistorique_DateCreation]
+                        ON [PrieresJanazaHistorique] ([DateCreation]);
+                END
+            ");
         }
 
         protected override void Down(MigrationBuilder migrationBuilder)
