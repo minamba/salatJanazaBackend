@@ -43,12 +43,13 @@ namespace QabrWebApp.Dal.Repositories
 
         public async Task<List<DomainModel.Mosquee>> GetNearbyAsync(double latitude, double longitude, double radiusKm)
         {
-            double delta = radiusKm / 111.0;
+            double latDelta = radiusKm / 111.0;
+            double lonDelta = radiusKm / (111.0 * Math.Cos(latitude * Math.PI / 180.0));
             var candidates = await _ctx.Mosquees
                 .AsNoTracking()
                 .Where(m => m.Statut == "Validee"
-                         && m.Latitude >= latitude - delta && m.Latitude <= latitude + delta
-                         && m.Longitude >= longitude - delta && m.Longitude <= longitude + delta)
+                         && m.Latitude >= latitude - latDelta && m.Latitude <= latitude + latDelta
+                         && m.Longitude >= longitude - lonDelta && m.Longitude <= longitude + lonDelta)
                 .ToListAsync();
 
             return candidates

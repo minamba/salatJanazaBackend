@@ -350,6 +350,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseWebSockets();
 app.UseRouting();
 app.UseCors("AllowFront");
 app.UseAuthentication();
