@@ -22,6 +22,52 @@ namespace QabrWebApp.Dal.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("QabrWebApp.Dal.Entities.CommentaireJanaza", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AuteurNom")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Contenu")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime>("DateCreation")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DateModification")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("EstCache")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("ParentCommentaireId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MentionNom")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("PriereJanazaId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("UtilisateurId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PriereJanazaId");
+
+                    b.ToTable("CommentairesJanaza");
+                });
+
             modelBuilder.Entity("QabrWebApp.Dal.Entities.Abonnement", b =>
                 {
                     b.Property<int>("Id")
@@ -389,6 +435,17 @@ namespace QabrWebApp.Dal.Migrations
                         .IsUnique();
 
                     b.ToTable("UtilisateurTokens");
+                });
+
+            modelBuilder.Entity("QabrWebApp.Dal.Entities.CommentaireJanaza", b =>
+                {
+                    b.HasOne("QabrWebApp.Dal.Entities.PriereJanaza", "PriereJanaza")
+                        .WithMany()
+                        .HasForeignKey("PriereJanazaId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PriereJanaza");
                 });
 
             modelBuilder.Entity("QabrWebApp.Dal.Entities.Abonnement", b =>

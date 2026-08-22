@@ -65,8 +65,8 @@ namespace QabrWebApp.Controllers
                 return period switch
                 {
                     "jour"    => local.Hour == slotIndex,
-                    "semaine" => local.Date == start.AddDays(slotIndex).Date,
-                    "mois"    => local.Date == start.AddDays(slotIndex).Date,
+                    "semaine" => local.Date == localStart.AddDays(slotIndex).Date,
+                    "mois"    => local.Date == localStart.AddDays(slotIndex).Date,
                     "annee"   => local.Month == slotIndex + 1,
                     _         => false
                 };

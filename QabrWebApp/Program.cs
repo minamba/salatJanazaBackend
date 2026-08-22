@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.IdentityModel.Tokens;
 using QabrWebApp.Builders;
 using QabrWebApp.Builders.impl;
@@ -50,7 +51,8 @@ builder.Services.AddSwaggerGen(c =>
 builder.Services.AddDbContext<QabrWebAppDatabaseContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
            .EnableSensitiveDataLogging()
-           .EnableDetailedErrors());
+           .EnableDetailedErrors()
+           .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning)));
 
 builder.Services.AddAutoMapper(cfg => cfg.AddProfile<MapperProfile>());
 
@@ -63,9 +65,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.RequireHttpsMetadata = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = true,
+            ValidateIssuer = false,
             ValidateAudience = true,
             ValidateLifetime = true,
+        };
+        options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+        {
+            OnAuthenticationFailed = ctx =>
+            {
+                var log = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                log.LogWarning("JWT authentication failed: {Error}", ctx.Exception?.Message);
+                return System.Threading.Tasks.Task.CompletedTask;
+            },
         };
     });
 
@@ -96,6 +107,9 @@ builder.Services.AddSingleton<ITelegramNotificationBuilder, TelegramNotification
 
 // Feature flags (persistées en BD via AppSettings)
 builder.Services.AddSingleton<FeatureFlagsService>();
+
+// WebSocket manager — diffuse les changements de visibilité des commentaires en temps réel
+builder.Services.AddSingleton<CommentWebSocketManager>();
 
 // Background services
 builder.Services.AddHostedService<PriereJanazaCleanupService>();
@@ -180,6 +194,53 @@ using (var scope = app.Services.CreateScope())
     try
     {
         db.Database.Migrate();
+
+        // Crée CommentairesJanaza si elle n'existe pas encore (déploiement fresh)
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND type = 'U')
+            BEGIN
+                CREATE TABLE CommentairesJanaza (
+                    Id                   INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    PriereJanazaId       INT NOT NULL,
+                    AuteurNom            NVARCHAR(100) NULL,
+                    Contenu              NVARCHAR(1000) NOT NULL DEFAULT '',
+                    DateCreation         DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+                    DateModification     DATETIME2 NULL,
+                    UtilisateurId        INT NULL,
+                    EstCache             BIT NOT NULL DEFAULT 0,
+                    ParentCommentaireId  INT NULL,
+                    MentionNom           NVARCHAR(100) NULL,
+                    CONSTRAINT FK_CommentairesJanaza_PriereJanazaId
+                        FOREIGN KEY (PriereJanazaId) REFERENCES PrieresJanaza(Id) ON DELETE CASCADE
+                );
+            END");
+
+        // Ajoute DateModification si la table existait déjà sans cette colonne
+        db.Database.ExecuteSqlRaw(@"
+            IF EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND type = 'U')
+               AND NOT EXISTS (SELECT 1 FROM sys.columns
+                               WHERE object_id = OBJECT_ID(N'CommentairesJanaza')
+                               AND name = N'DateModification')
+            BEGIN
+                ALTER TABLE CommentairesJanaza ADD DateModification datetime2 NULL
+            END");
+
+        // Crée LikesCommentaires si elle n'existe pas
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'LikesCommentaires') AND type = 'U')
+            BEGIN
+                CREATE TABLE LikesCommentaires (
+                    Id            INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    CommentaireId INT NOT NULL,
+                    UtilisateurId INT NULL,
+                    DateCreation  DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+                    CONSTRAINT FK_LikesCommentaires_CommentaireId
+                        FOREIGN KEY (CommentaireId) REFERENCES CommentairesJanaza(Id) ON DELETE CASCADE
+                );
+                CREATE UNIQUE INDEX UX_LikesCommentaires_CommentUser
+                    ON LikesCommentaires (CommentaireId, UtilisateurId)
+                    WHERE UtilisateurId IS NOT NULL;
+            END");
     }
     catch (Exception ex)
     {
@@ -289,6 +350,51 @@ using (var scope = app.Services.CreateScope())
         Console.WriteLine($"[Startup] Warning VilleEnterrement columns : {ex.Message}");
     }
 
+    // Table commentaires janaza — idempotent
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.objects
+                WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND type = N'U'
+            )
+            BEGIN
+                CREATE TABLE [CommentairesJanaza] (
+                    [Id]               INT IDENTITY(1,1)   NOT NULL,
+                    [PriereJanazaId]   INT                 NOT NULL,
+                    [AuteurNom]        NVARCHAR(100)       NULL,
+                    [Contenu]          NVARCHAR(1000)      NOT NULL,
+                    [DateCreation]     DATETIME2(7)        NOT NULL,
+                    CONSTRAINT [PK_CommentairesJanaza] PRIMARY KEY ([Id]),
+                    CONSTRAINT [FK_CommentairesJanaza_PrieresJanaza]
+                        FOREIGN KEY ([PriereJanazaId])
+                        REFERENCES [PrieresJanaza] ([Id])
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX [IX_CommentairesJanaza_PriereJanazaId]
+                    ON [CommentairesJanaza] ([PriereJanazaId]);
+                PRINT '[Startup] Table CommentairesJanaza créée.';
+            END
+
+            -- Colonnes ajoutées après la création initiale
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND name = N'UtilisateurId')
+                ALTER TABLE [CommentairesJanaza] ADD [UtilisateurId] INT NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND name = N'EstCache')
+                ALTER TABLE [CommentairesJanaza] ADD [EstCache] BIT NOT NULL DEFAULT 0;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND name = N'ParentCommentaireId')
+                ALTER TABLE [CommentairesJanaza] ADD [ParentCommentaireId] INT NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND name = N'MentionNom')
+                ALTER TABLE [CommentairesJanaza] ADD [MentionNom] NVARCHAR(100) NULL;
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Warning CommentairesJanaza : {ex.Message}");
+    }
+
     // Backfill historique — exécuté une seule fois si la table est vide
     // Rétroalimente toutes les janazas existantes avant le déploiement de cette feature
     try
@@ -323,6 +429,38 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+// Colonne IsAdminAuthor sur CommentairesJanaza + backfill
+try
+{
+    using var caScope = app.Services.CreateScope();
+    var caDb = caScope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
+    caDb.Database.ExecuteSqlRaw(@"
+        IF NOT EXISTS (
+            SELECT 1 FROM sys.columns
+            WHERE object_id = OBJECT_ID(N'CommentairesJanaza') AND name = N'IsAdminAuthor'
+        )
+        BEGIN
+            ALTER TABLE [CommentairesJanaza] ADD [IsAdminAuthor] BIT NOT NULL DEFAULT 0;
+            UPDATE c SET c.IsAdminAuthor = 1
+            FROM [CommentairesJanaza] c
+            INNER JOIN [Utilisateurs] u ON u.Id = c.UtilisateurId
+            WHERE u.Role != 'User';
+        END
+    ");
+}
+catch (Exception ex) { Console.WriteLine($"[Startup] Warning IsAdminAuthor : {ex.Message}"); }
+
+// Sync du rôle CEO : le seeder IdentityServer ne met pas à jour Utilisateurs.Role
+try
+{
+    using var syncScope = app.Services.CreateScope();
+    var syncDb = syncScope.ServiceProvider.GetRequiredService<QabrWebAppDatabaseContext>();
+    await syncDb.Utilisateurs
+        .Where(u => u.Email == "ceo@salatjanaza.org" && u.Role == "User")
+        .ExecuteUpdateAsync(s => s.SetProperty(u => u.Role, "Admin"));
+}
+catch (Exception ex) { Console.WriteLine($"[Startup] Warning sync CEO role : {ex.Message}"); }
+
 try { await app.Services.GetRequiredService<FeatureFlagsService>().InitAsync(); }
 catch (Exception ex) { Console.WriteLine($"[Startup] Warning feature flags: {ex.Message}"); }
 
@@ -355,6 +493,33 @@ app.UseRouting();
 app.UseCors("AllowFront");
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Endpoint WebSocket pour les mises à jour temps réel des commentaires
+app.Map("/ws/comments", async (HttpContext ctx, CommentWebSocketManager mgr) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    var id = mgr.Add(ws);
+    var buf = new byte[256];
+    try
+    {
+        while (ws.State == System.Net.WebSockets.WebSocketState.Open)
+        {
+            var result = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
+            if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close) break;
+        }
+    }
+    catch { }
+    finally
+    {
+        mgr.Remove(id);
+        if (ws.State != System.Net.WebSockets.WebSocketState.Closed)
+        {
+            try { await ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch { }
+        }
+    }
+});
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

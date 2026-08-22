@@ -174,13 +174,14 @@ namespace QabrWebApp.Services
 
         public Task SendToTokensAsync(IEnumerable<string> tokens, string title, string body, object? data = null)
         {
-            var messages = tokens.Select(token => new { to = token, title, body, data, sound = "default", channelId = "default", priority = "high" }).ToList();
+            var effectiveData = data ?? new { };
+            var messages = tokens.Select(token => new { to = token, title, body, data = effectiveData, sound = "default", channelId = "default", priority = "high" }).ToList();
             return SendBatchAsync(messages);
         }
 
         public async Task SendToTokenAsync(string expoToken, string title, string body, object? data = null)
         {
-            var message = new { to = expoToken, title, body, data, sound = "default", channelId = "default", priority = "high" };
+            var message = new { to = expoToken, title, body, data = data ?? new { }, sound = "default", channelId = "default", priority = "high" };
             await SendBatchAsync([message]);
         }
 
@@ -254,6 +255,32 @@ namespace QabrWebApp.Services
             });
 
             await SendBatchAsync(messages);
+        }
+
+        public async Task SendToAllUsersAsync(string title, string body)
+        {
+            const int pageSize = 500;        // 500 tokens → 5 requêtes Expo (100 chacune)
+            const int delayBetweenPages = 2000; // 2s entre chaque page pour ne pas saturer Expo
+
+            int skip = 0;
+            int totalSent = 0;
+
+            while (true)
+            {
+                var tokens = await _tokenRepo.GetAllTokensPagedAsync(skip, pageSize);
+                if (tokens.Count == 0) break;
+
+                _logger.LogInformation("[BroadcastPush] Page skip={Skip} → {Count} token(s)", skip, tokens.Count);
+                await SendToTokensAsync(tokens, title, body);
+
+                totalSent += tokens.Count;
+                if (tokens.Count < pageSize) break;
+
+                skip += tokens.Count;
+                await Task.Delay(delayBetweenPages);
+            }
+
+            _logger.LogInformation("[BroadcastPush] Terminé — {Total} token(s) notifiés", totalSent);
         }
 
         public Task SendPermissionUpdateToManyAsync(IEnumerable<string> expoTokens, bool canImportFlyer)

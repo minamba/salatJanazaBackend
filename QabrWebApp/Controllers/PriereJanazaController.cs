@@ -59,6 +59,7 @@ namespace QabrWebApp.Controllers
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<PriereJanazaController> _logger;
         private readonly DalEntities.QabrWebAppDatabaseContext _db;
+        private readonly CommentWebSocketManager _wsComments;
 
         public PriereJanazaController(
             IPriereJanazaService service,
@@ -74,7 +75,8 @@ namespace QabrWebApp.Controllers
             ITelegramNotificationBuilder telegram,
             IServiceScopeFactory scopeFactory,
             ILogger<PriereJanazaController> logger,
-            DalEntities.QabrWebAppDatabaseContext db)
+            DalEntities.QabrWebAppDatabaseContext db,
+            CommentWebSocketManager wsComments)
         {
             _service = service;
             _builder = builder;
@@ -90,6 +92,7 @@ namespace QabrWebApp.Controllers
             _scopeFactory = scopeFactory;
             _logger = logger;
             _db = db;
+            _wsComments = wsComments;
         }
 
         // Exécute une notification en arrière-plan dans son propre scope DI (DbContext isolé).
@@ -1142,6 +1145,335 @@ namespace QabrWebApp.Controllers
                 [System.Text.Json.Serialization.JsonPropertyName("country_code")]
                 public string? CountryCode { get; set; }
             }
+        }
+
+        [HttpGet("commentaires/counts")]
+        [SwaggerOperation(Summary = "Retourne le nombre de commentaires visibles pour une liste d'IDs de prières")]
+        public async Task<IActionResult> GetCommentairesCounts([FromQuery] string ids)
+        {
+            if (string.IsNullOrWhiteSpace(ids)) return Ok(new { });
+
+            var idList = ids.Split(',')
+                .Select(s => int.TryParse(s.Trim(), out var v) ? v : -1)
+                .Where(v => v > 0)
+                .Distinct()
+                .ToList();
+
+            var counts = await _db.CommentairesJanaza
+                .Where(c => idList.Contains(c.PriereJanazaId) && !c.EstCache)
+                .GroupBy(c => c.PriereJanazaId)
+                .Select(g => new { Id = g.Key, Count = g.Count() })
+                .ToListAsync();
+
+            var result = counts.ToDictionary(x => x.Id.ToString(), x => x.Count);
+            return Ok(result);
+        }
+
+        [HttpGet("commentaires/all")]
+        [SwaggerOperation(Summary = "Liste tous les commentaires (admin)")]
+        public async Task<IActionResult> GetAllCommentaires()
+        {
+            var list = await _db.CommentairesJanaza
+                .Include(c => c.PriereJanaza)
+                .OrderByDescending(c => c.DateCreation)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.PriereJanazaId,
+                    NomDefunt = c.PriereJanaza != null ? c.PriereJanaza.NomDefunt : null,
+                    EstAnonyme = c.PriereJanaza != null && c.PriereJanaza.EstAnonyme,
+                    c.AuteurNom,
+                    c.UtilisateurId,
+                    c.Contenu,
+                    c.DateCreation,
+                    c.EstCache,
+                })
+                .ToListAsync();
+            return Ok(list);
+        }
+
+        [HttpGet("{id}/commentaires")]
+        [SwaggerOperation(Summary = "Liste les commentaires d'une prière janaza")]
+        public async Task<IActionResult> GetCommentaires(int id, [FromQuery] int? utilisateurId)
+        {
+            var priere = await _service.GetByIdAsync(id);
+            if (priere is null) return NotFound();
+
+            var isAdmin = User.IsInRole("admin") || User.IsInRole("superadmin");
+
+            var query = _db.CommentairesJanaza
+                .Where(c => c.PriereJanazaId == id);
+
+            if (!isAdmin)
+                query = query.Where(c => !c.EstCache);
+
+            var list = await query
+                .OrderBy(c => c.DateCreation)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.AuteurNom,
+                    c.UtilisateurId,
+                    c.Contenu,
+                    c.DateCreation,
+                    c.DateModification,
+                    c.EstCache,
+                    c.ParentCommentaireId,
+                    c.MentionNom,
+                    likeCount = _db.LikesCommentaires.Count(l => l.CommentaireId == c.Id),
+                    isLikedByMe = utilisateurId.HasValue && _db.LikesCommentaires.Any(l => l.CommentaireId == c.Id && l.UtilisateurId == utilisateurId),
+                    isAdmin = _db.Utilisateurs.Any(u => u.Id == c.UtilisateurId && u.Role != "User"),
+                })
+                .ToListAsync();
+
+            return Ok(list);
+        }
+
+        [HttpPost("{id}/commentaires/{commentId}/like")]
+        [SwaggerOperation(Summary = "Aime ou désaime un commentaire (toggle)")]
+        public async Task<IActionResult> LikeCommentaire(int id, int commentId, [FromBody] LikeCommentaireRequest req)
+        {
+            var comment = await _db.CommentairesJanaza
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.PriereJanazaId == id);
+            if (comment is null) return NotFound();
+
+            int? utilisateurId = null;
+            var identityId = User.Claims
+                .FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier
+                                  || c.Type == "sub"
+                                  || c.Type.EndsWith("/nameidentifier"))?.Value;
+            if (!string.IsNullOrEmpty(identityId))
+            {
+                var u = await _db.Utilisateurs.FirstOrDefaultAsync(x => x.IdentityUserId == identityId);
+                utilisateurId = u?.Id;
+            }
+            else if (req?.UtilisateurId.HasValue == true)
+            {
+                utilisateurId = req.UtilisateurId.Value;
+            }
+
+            if (!utilisateurId.HasValue)
+                return Unauthorized(new { error = "Authentification requise pour aimer un commentaire." });
+
+            var existing = await _db.LikesCommentaires
+                .FirstOrDefaultAsync(l => l.CommentaireId == commentId && l.UtilisateurId == utilisateurId);
+
+            bool liked;
+            if (existing != null)
+            {
+                _db.LikesCommentaires.Remove(existing);
+                liked = false;
+            }
+            else
+            {
+                _db.LikesCommentaires.Add(new DalEntities.LikeCommentaire
+                {
+                    CommentaireId = commentId,
+                    UtilisateurId = utilisateurId.Value,
+                    DateCreation = DateTime.UtcNow,
+                });
+                liked = true;
+            }
+
+            await _db.SaveChangesAsync();
+
+            var likeCount = await _db.LikesCommentaires.CountAsync(l => l.CommentaireId == commentId);
+            return Ok(new { liked, likeCount });
+        }
+
+        [HttpPost("{id}/commentaires")]
+        [SwaggerOperation(Summary = "Ajoute un commentaire à une prière janaza")]
+        public async Task<IActionResult> AddCommentaire(int id, [FromBody] CommentaireJanazaRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.Contenu))
+                return BadRequest(new { error = "Le contenu est requis." });
+
+            var priere = await _service.GetByIdAsync(id);
+            if (priere is null) return NotFound();
+
+            var contenu = req.Contenu.Trim();
+            if (contenu.Length > 1000) contenu = contenu[..1000];
+
+            var auteurNom = string.IsNullOrWhiteSpace(req.AuteurNom) ? null : req.AuteurNom.Trim();
+            if (auteurNom?.Length > 100) auteurNom = auteurNom[..100];
+
+            // Valider que le parent appartient bien à la même janaza
+            if (req.ParentCommentaireId.HasValue)
+            {
+                var parentExists = await _db.CommentairesJanaza
+                    .AnyAsync(c => c.Id == req.ParentCommentaireId.Value && c.PriereJanazaId == id && c.ParentCommentaireId == null);
+                if (!parentExists) return BadRequest(new { error = "Commentaire parent invalide." });
+            }
+
+            // Résoudre l'utilisateurId depuis le JWT, avec fallback sur le frontend
+            int? utilisateurId = null;
+            var identityId = User.Claims
+                .FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier
+                                  || c.Type == "sub"
+                                  || c.Type.EndsWith("/nameidentifier"))?.Value;
+            if (!string.IsNullOrEmpty(identityId))
+            {
+                var u = await _db.Utilisateurs.FirstOrDefaultAsync(x => x.IdentityUserId == identityId);
+                utilisateurId = u?.Id ?? req.UtilisateurId;
+                if (u is null)
+                    _logger.LogWarning("AddCommentaire: identityId={IdentityId} non trouvé dans Utilisateurs — fallback sur req.UtilisateurId={FallbackId}", identityId, req.UtilisateurId);
+            }
+            else if (req.UtilisateurId.HasValue)
+            {
+                utilisateurId = req.UtilisateurId.Value;
+            }
+            else
+            {
+                _logger.LogWarning("AddCommentaire: aucun claim identitaire trouvé dans le JWT (User.Identity.IsAuthenticated={IsAuth})", User.Identity?.IsAuthenticated);
+            }
+
+            var isAdminAuthor = (utilisateurId.HasValue && await _db.Utilisateurs.AnyAsync(u => u.Id == utilisateurId.Value && u.Role != "User"))
+                             || User.IsInRole("admin") || User.IsInRole("superadmin") || User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
+
+            var comment = new DalEntities.CommentaireJanaza
+            {
+                PriereJanazaId = id,
+                AuteurNom = auteurNom,
+                Contenu = contenu,
+                DateCreation = DateTime.UtcNow,
+                UtilisateurId = utilisateurId,
+                ParentCommentaireId = req.ParentCommentaireId,
+                MentionNom = string.IsNullOrWhiteSpace(req.MentionNom) ? null : req.MentionNom.Trim(),
+            };
+
+            _db.CommentairesJanaza.Add(comment);
+            await _db.SaveChangesAsync();
+
+            var nomDefunt = priere.EstAnonyme ? "Anonyme" : (priere.NomDefunt ?? "—");
+            _ = _telegram.NotifyNewCommentaireAsync(nomDefunt, comment.AuteurNom, comment.Contenu, comment.ParentCommentaireId.HasValue);
+
+            return CreatedAtAction(
+                nameof(GetCommentaires),
+                new { id },
+                new { comment.Id, comment.AuteurNom, comment.UtilisateurId, comment.Contenu, comment.DateCreation, comment.DateModification, comment.EstCache, comment.ParentCommentaireId, comment.MentionNom, isAdmin = isAdminAuthor });
+        }
+
+        [HttpPut("{id}/commentaires/{commentId}")]
+        [SwaggerOperation(Summary = "Modifie un commentaire (auteur ou admin)")]
+        public async Task<IActionResult> UpdateCommentaire(int id, int commentId, [FromBody] CommentaireJanazaRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.Contenu))
+                return BadRequest(new { error = "Le contenu est requis." });
+
+            var comment = await _db.CommentairesJanaza
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.PriereJanazaId == id);
+            if (comment is null) return NotFound();
+
+            var isAdmin = User.IsInRole("admin") || User.IsInRole("superadmin");
+
+            // Vérifier propriété si pas admin
+            if (!isAdmin)
+            {
+                var identityId = User.Claims
+                    .FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier
+                                      || c.Type == "sub"
+                                      || c.Type.EndsWith("/nameidentifier"))?.Value;
+
+                if (!string.IsNullOrEmpty(identityId))
+                {
+                    // JWT validé : vérification stricte de la propriété
+                    var u = await _db.Utilisateurs.FirstOrDefaultAsync(x => x.IdentityUserId == identityId);
+                    if (u is null) return Forbid();
+                    if (comment.UtilisateurId == null)
+                        comment.UtilisateurId = u.Id;
+                    else if (comment.UtilisateurId != u.Id)
+                        return Forbid();
+                }
+                else if (comment.UtilisateurId != null)
+                {
+                    // JWT non disponible + commentaire avec owner : accepter si le frontend confirme le même utilisateurId
+                    if (!req.UtilisateurId.HasValue || req.UtilisateurId.Value != comment.UtilisateurId)
+                    {
+                        _logger.LogWarning("UpdateCommentaire: JWT non résolu, commentaire avec utilisateurId={Uid} → Forbid", comment.UtilisateurId);
+                        return Forbid();
+                    }
+                }
+                else if (req.UtilisateurId.HasValue)
+                {
+                    // JWT non disponible + commentaire sans owner : on fait confiance à l'utilisateurId fourni par le frontend
+                    comment.UtilisateurId = req.UtilisateurId.Value;
+                }
+                // JWT non disponible + commentaire sans owner + pas d'utilisateurId → on laisse passer
+            }
+
+            var contenu = req.Contenu.Trim();
+            if (contenu.Length > 1000) contenu = contenu[..1000];
+            comment.Contenu = contenu;
+            comment.DateModification = DateTime.UtcNow;
+
+            await _db.SaveChangesAsync();
+            return Ok(new { comment.Id, comment.AuteurNom, comment.UtilisateurId, comment.Contenu, comment.DateCreation, comment.DateModification, comment.EstCache });
+        }
+
+        [HttpPatch("{id}/commentaires/{commentId}/visibility")]
+        [SwaggerOperation(Summary = "Cache ou affiche un commentaire (admin)")]
+        public async Task<IActionResult> ToggleCommentaireVisibility(int id, int commentId)
+        {
+            var comment = await _db.CommentairesJanaza
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.PriereJanazaId == id);
+            if (comment is null) return NotFound();
+
+            comment.EstCache = !comment.EstCache;
+            await _db.SaveChangesAsync();
+
+            // Diffuser le changement en temps réel à tous les téléphones connectés
+            var msg = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                type = "comment_visibility",
+                commentId = comment.Id,
+                priereJanazaId = comment.PriereJanazaId,
+                estCache = comment.EstCache,
+            });
+            _ = _wsComments.BroadcastAsync(msg);
+
+            return Ok(new { comment.Id, comment.EstCache });
+        }
+
+        [HttpDelete("{id}/commentaires/{commentId}")]
+        [SwaggerOperation(Summary = "Supprime un commentaire (admin ou auteur)")]
+        public async Task<IActionResult> DeleteCommentaire(int id, int commentId, [FromQuery] int? utilisateurId = null)
+        {
+            var comment = await _db.CommentairesJanaza
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.PriereJanazaId == id);
+            if (comment is null) return NotFound();
+
+            var isAdmin = User.IsInRole("admin") || User.IsInRole("superadmin");
+
+            if (!isAdmin)
+            {
+                var identityId = User.Claims
+                    .FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier
+                                      || c.Type == "sub"
+                                      || c.Type.EndsWith("/nameidentifier"))?.Value;
+
+                if (!string.IsNullOrEmpty(identityId))
+                {
+                    var u = await _db.Utilisateurs.FirstOrDefaultAsync(x => x.IdentityUserId == identityId);
+                    if (u is null) return Forbid();
+                    if (comment.UtilisateurId != null && comment.UtilisateurId != u.Id)
+                        return Forbid();
+                }
+                else if (comment.UtilisateurId != null)
+                {
+                    if (!utilisateurId.HasValue || utilisateurId.Value != comment.UtilisateurId)
+                        return Forbid();
+                }
+            }
+
+            // Supprimer d'abord les réponses à ce commentaire
+            var replies = await _db.CommentairesJanaza
+                .Where(c => c.ParentCommentaireId == commentId)
+                .ToListAsync();
+            if (replies.Count > 0) _db.CommentairesJanaza.RemoveRange(replies);
+
+            _db.CommentairesJanaza.Remove(comment);
+            await _db.SaveChangesAsync();
+            return NoContent();
         }
 
         [HttpGet("historique")]

@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using QabrWebApp.Dal.Entities;
 using System.Collections.Concurrent;
@@ -103,6 +103,8 @@ namespace QabrWebApp.Services
 
         public async Task<FeatureFlagsDto> SetInfoMessageAsync(bool active, string message)
         {
+            bool wasActive = _cache.InfoMessage.Active;
+
             await _lock.WaitAsync();
             try
             {
@@ -124,9 +126,23 @@ namespace QabrWebApp.Services
                 await db.SaveChangesAsync();
                 _cache.InfoMessage.Active  = active;
                 _cache.InfoMessage.Message = message;
+
             }
             finally { _lock.Release(); }
             await BroadcastAsync();
+
+            if (active && !wasActive)
+            {
+                _ = Task.Run(async () =>
+                {
+                    using var pushScope = _scopeFactory.CreateScope();
+                    var push = pushScope.ServiceProvider.GetRequiredService<IPushNotificationService>();
+                    await push.SendToAllUsersAsync(
+                        "📣 Information importante",
+                        "Un nouveau message est disponible dans l'application.\n─────────────────\nL'équipe Salat Janaza");
+                });
+            }
+
             return _cache;
         }
     }

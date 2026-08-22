@@ -7,5 +7,6 @@ namespace QabrWebApp.Builders
         Task NotifyNewJanazaAsync(PriereJanaza priere, string mosqueeNom, string? mosqueeAdresse, Utilisateur? utilisateur);
         Task NotifyPendingJanazaAsync(PriereJanaza priere, string mosqueeNom);
         Task NotifyPendingMosqueeAsync(Mosquee mosquee, string? utilisateurEmail);
+        Task NotifyNewCommentaireAsync(string nomDefunt, string? auteurNom, string contenu, bool isReply);
     }
 }

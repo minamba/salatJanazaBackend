@@ -15,6 +15,8 @@ namespace QabrWebApp.Dal.Entities
         public DbSet<RappelPush>                RappelsPush               { get; set; }
         public DbSet<UtilisateurToken>          UtilisateurTokens         { get; set; }
         public DbSet<AppSetting>                AppSettings               { get; set; }
+        public DbSet<CommentaireJanaza>         CommentairesJanaza        { get; set; }
+        public DbSet<LikeCommentaire>           LikesCommentaires         { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -78,6 +80,23 @@ namespace QabrWebApp.Dal.Entities
                 .WithMany()
                 .HasForeignKey(t => t.UtilisateurId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<CommentaireJanaza>()
+                .HasOne(c => c.PriereJanaza)
+                .WithMany()
+                .HasForeignKey(c => c.PriereJanazaId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<LikeCommentaire>()
+                .HasOne(l => l.CommentaireJanaza)
+                .WithMany()
+                .HasForeignKey(l => l.CommentaireId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<LikeCommentaire>()
+                .HasIndex(l => new { l.CommentaireId, l.UtilisateurId })
+                .IsUnique()
+                .HasFilter("[UtilisateurId] IS NOT NULL");
         }
     }
 }

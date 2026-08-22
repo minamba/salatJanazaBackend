@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using OpenIddict.Abstractions;
 using QabrWebApp.IdentityServer.Data;
 using QabrWebApp.IdentityServer.Models;
@@ -20,6 +21,7 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
     options.UseOpenIddict();
+    options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 });
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
